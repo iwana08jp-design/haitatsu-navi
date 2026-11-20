@@ -17,8 +17,19 @@ const MAP_SOURCES = {
   // zenrin: { name: 'ゼンリン地図', url: '契約で案内されるURL', max: 20, attr: '© ZENRIN' }
 };
 const PRESET_AREAS = {
+  shinko: { name: '信更町とその周辺', s: 36.50, w: 138.00, n: 36.63, e: 138.13 },
   nagano: { name: '長野市とその周辺', s: 36.45, w: 137.93, n: 36.85, e: 138.38 }
 };
+const HOME_AREA = { city: '長野市', town: '信更町' };
+const KINDS = [{ k: 'deliver', label: '配達' }, { k: 'pickup', label: '集荷' }];
+const TEMPS = [{ k: '', label: '常温' }, { k: 'chill', label: '冷蔵', icon: '🧊' }, { k: 'frozen', label: '冷凍', icon: '❄️' }];
+const OKIHAI = [{ k: 'ok', label: '可' }, { k: 'ng', label: '不可' }];
+function stopTags(s) {
+  return [s.kind === 'pickup' ? '<span class="pick">集荷</span>' : '',
+    s.slot ? `<span class="slot">⏰ ${slotOf(s.slot).label}</span>` : '',
+    s.temp === 'frozen' ? '<span class="cold">❄️ 冷凍</span>' : s.temp === 'chill' ? '<span class="cold">🧊 冷蔵</span>' : '',
+    s.okihai === 'ok' ? '<span class="okk">置き配 可</span>' : s.okihai === 'ng' ? '<span class="ng">置き配 不可</span>' : '<span class="warn">置き配 未確認</span>'].join('');
+}
 const TIME_SLOTS = [
   { k: '', label: '指定なし', short: '' }, { k: 'am', label: '午前中', short: '午前' },
   { k: '14', label: '14〜16時', short: '14-16' }, { k: '16', label: '16〜18時', short: '16-18' }, { k: '19', label: '19〜21時', short: '19-21' }
@@ -35,9 +46,9 @@ const HAZARD_TYPES = { ice: { icon: '❄️', name: '凍結注意' }, chain: { i
 
 /* ---------- 状態 ---------- */
 const S = {
-  settings: { mapSource: 'gsi_std', area: Object.assign({}, PRESET_AREAS.nagano), maxZoom: 16, speech: true,
+  settings: { v: 2, mapSource: 'gsi_std', area: Object.assign({}, PRESET_AREAS.shinko), maxZoom: 17, speech: true, voiceInput: true, lastTown: '',
     startMode: 'gps', home: null, endMode: 'open', autoCache: true },
-  plans: [], planId: null, hazards: [],
+  plans: [], planId: null, hazards: [], favorites: [],
   graphMeta: null, pos: null, nav: null, expanded: null, pick: null
 };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -47,7 +58,7 @@ let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards }).catch((e) => toast('保存できませんでした：' + e.message));
+    DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards, favorites: S.favorites }).catch((e) => toast('保存できませんでした：' + e.message));
   }, 300);
 }
 
@@ -224,7 +235,7 @@ const normAddr = (s) => String(s).normalize('NFKC').replace(/\s/g, '').replace(/
 async function loadAddr() {
   try {
     const r = await fetch('addresses.json');
-    ADDR = (await r.json()).map((a) => ({ city: a[0], town: a[1], lat: a[2], lng: a[3], key: normAddr(a[0] + a[1]), key2: normAddr(a[1]) }));
+    ADDR = (await r.json()).map((a) => ({ city: a[0], group: a[1], leaf: a[2], town: a[1] + a[2], lat: a[3], lng: a[4], key: normAddr(a[0] + a[1] + a[2]), key2: normAddr(a[1] + a[2]) }));
   } catch (e) { ADDR = []; }
 }
 function offlineSearch(q) {
@@ -303,7 +314,7 @@ function newPlan(name) {
 function addStop(o, focus) {
   const p = plan() || newPlan();
   const s = { id: uid(), name: o.name || '', address: o.address || '', memo: o.memo || '', lat: o.lat, lng: o.lng,
-    approx: !!o.approx, priority: false, slot: o.slot || '', status: 'todo' };
+    approx: !!o.approx, priority: false, slot: o.slot || '', kind: o.kind || 'deliver', temp: o.temp || '', okihai: o.okihai || '', favId: o.favId || null, status: 'todo' };
   p.stops.push(s); p.estimate = null; save(); renderPlan(); renderStops();
   toast(`${p.stops.length}件目を追加しました`);
   if (focus) map.panTo([s.lat, s.lng]);
@@ -320,7 +331,7 @@ function renderStops() {
   const line = [];
   p.stops.forEach((s, i) => {
     const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
-    const m = L.marker([s.lat, s.lng], { draggable: !S.nav && S.dragId === s.id, icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
+    const m = L.marker([s.lat, s.lng], { draggable: !S.nav && S.dragId === s.id, icon: L.divIcon({ className: '', html: `<div class="pin ${cls} ${s.kind === 'pickup' ? 'pickup' : ''}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}${s.temp ? `<div class="tempb">${s.temp === 'frozen' ? '❄️' : '🧊'}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
     m.on('click', () => { if (S.nav) return; S.expanded = s.id; showTab('plan'); renderPlan(); $('sheet').classList.remove('collapsed'); const el = document.querySelector(`[data-sid="${s.id}"]`); if (el) el.scrollIntoView({ block: 'center' }); });
     m.on('dragend', () => { const ll = m.getLatLng(); s.lat = ll.lat; s.lng = ll.lng; s.approx = false; p.estimate = null; S.dragId = null; save(); renderPlan(); renderStops(); toast('位置を直しました'); });
     m.addTo(stopLayer);
@@ -391,7 +402,7 @@ function renderPlan() {
 function stopRow(p, s, i) {
   const nextIdx = nextStopIndex(p);
   const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
-  const tags = [s.slot ? `<span class="slot">⏰ ${slotOf(s.slot).label}</span>` : '', s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
+  const tags = [stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
   let html = `<div class="stop ${cls}" data-sid="${s.id}"><div class="num">${i + 1}</div><div class="body">
     <div class="name">${esc(stopLabel(s))}</div>${s.name && s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
     ${s.memo ? `<div class="addr">📝 ${esc(s.memo)}</div>` : ''}<div class="tags">${tags}</div></div></div>`;
@@ -426,61 +437,177 @@ async function stopAction(act, id) {
   }
   save(); renderPlan(); renderStops();
 }
-function slotButtons(cur) {
-  return `<div class="slots" id="slotBox">${TIME_SLOTS.map((t) => `<button type="button" data-slot="${t.k}" class="${(cur || '') === t.k ? 'on' : ''}">${t.label}</button>`).join('')}</div>`;
+/* ---------- 選択ボタン（時間帯・種別・温度帯・置き配） ---------- */
+function chips(id, options, cur) {
+  return `<div class="slots" id="${id}">${options.map((t) => `<button type="button" data-v="${t.k}" class="${(cur || '') === t.k ? 'on' : ''}">${t.icon ? t.icon + ' ' : ''}${t.label}</button>`).join('')}</div>`;
 }
-function bindSlotButtons() {
-  document.querySelectorAll('#slotBox [data-slot]').forEach((b) => {
-    b.onclick = () => { document.querySelectorAll('#slotBox [data-slot]').forEach((x) => x.classList.remove('on')); b.classList.add('on'); };
+function bindChips(id) {
+  document.querySelectorAll(`#${id} [data-v]`).forEach((b) => {
+    b.onclick = () => { document.querySelectorAll(`#${id} [data-v]`).forEach((x) => x.classList.remove('on')); b.classList.add('on'); $(id).classList.remove('need'); };
   });
 }
-function pickedSlot() { const b = document.querySelector('#slotBox .on'); return b ? b.dataset.slot : ''; }
+function chipVal(id) { const b = document.querySelector(`#${id} .on`); return b ? b.dataset.v : ''; }
+function micBtn(target) { return S.settings.voiceInput ? `<button type="button" class="mic" data-mic="${target}" title="音声で入力">🎤</button>` : ''; }
+function withMic(inputHtml, id) { return S.settings.voiceInput ? `<div class="microw">${inputHtml}${micBtn(id)}</div>` : inputHtml; }
+let recog = null;
+function bindMics(root) {
+  (root || document).querySelectorAll('[data-mic]').forEach((b) => {
+    b.onclick = () => {
+      const input = $(b.dataset.mic);
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { input.focus(); return toast('キーボードのマイクボタン🎤を押して話してください', 4500); }
+      if (recog) { try { recog.stop(); } catch (e) { /* なし */ } recog = null; b.classList.remove('rec'); return; }
+      recog = new SR(); recog.lang = 'ja-JP'; recog.interimResults = false; recog.continuous = false;
+      b.classList.add('rec'); toast('話してください…', 2500);
+      recog.onresult = (e) => {
+        const t = Array.from(e.results).map((r) => r[0].transcript).join('');
+        input.value = (input.value ? input.value + ' ' : '') + t; input.dispatchEvent(new Event('input'));
+      };
+      recog.onerror = (e) => { toast(e.error === 'not-allowed' ? 'マイクの利用が許可されていません' : 'うまく聞き取れませんでした。キーボードのマイク🎤もお使いください', 4000); };
+      recog.onend = () => { b.classList.remove('rec'); recog = null; };
+      try { recog.start(); } catch (e) { b.classList.remove('rec'); recog = null; input.focus(); toast('キーボードのマイクボタン🎤を押して話してください', 4500); }
+    };
+  });
+}
+
+/* 配達先の入力欄（追加と編集で共通） */
+function stopFormHtml(s, isNew) {
+  return `
+    <label>種別</label>${chips('fKind', KINDS, s.kind || 'deliver')}
+    <label>時間帯</label>${chips('fSlot', TIME_SLOTS, s.slot || '')}
+    <label>温度帯</label>${chips('fTemp', TEMPS, s.temp || '')}
+    <label>置き配 <span class="req">必須</span></label>${chips('fOki', OKIHAI, s.okihai || '')}
+    <label>名前</label>${withMic(`<input id="fName" value="${esc(s.name || '')}" placeholder="例：山田様">`, 'fName')}
+    <label>住所</label>${withMic(`<input id="fAddr" value="${esc(s.address || '')}">`, 'fAddr')}
+    <label>詳しい情報（置き場所・建物・注意など）</label>${withMic(`<textarea id="fMemo" rows="3" placeholder="例：玄関横の宅配ボックス／犬がいる／坂の上の青い屋根">${esc(s.memo || '')}</textarea>`, 'fMemo')}
+    ${isNew ? `<label style="display:flex;gap:10px;align-items:center;color:var(--text)"><input type="checkbox" id="fFav" style="width:24px;height:24px" checked> よく使う住所に保存する</label>` : ''}`;
+}
+function bindStopForm(box) { ['fKind', 'fSlot', 'fTemp', 'fOki'].forEach(bindChips); bindMics(box); }
+function readStopForm() {
+  const okihai = chipVal('fOki');
+  if (!okihai) { $('fOki').classList.add('need'); $('fOki').scrollIntoView({ block: 'center' }); toast('置き配の「可」か「不可」を選んでください'); return null; }
+  return { kind: chipVal('fKind') || 'deliver', slot: chipVal('fSlot'), temp: chipVal('fTemp'), okihai,
+    name: $('fName').value.trim(), address: $('fAddr').value.trim(), memo: $('fMemo').value.trim(), fav: $('fFav') ? $('fFav').checked : false };
+}
 function newStopDialog(o) {
-  openModal(`<h2>配達先を追加</h2><div class="small muted">${esc(o.address || '')}</div>
-    <label>時間帯</label>${slotButtons('')}
-    <label>名前（なくても大丈夫）</label><input id="nsName" placeholder="例：山田様">
-    <label>メモ（置き場所など）</label><input id="nsMemo" placeholder="例：玄関前に置き配">
-    <div class="modal-btns"><button id="nsNo">やめる</button><button id="nsOk" class="primary">追加</button></div>`, () => {
-    bindSlotButtons();
+  openModal(`<h2>${o.fromFav ? 'よく使う住所から追加' : '配達先を追加'}</h2>${stopFormHtml(o, true)}
+    <div class="modal-btns"><button id="nsNo">やめる</button><button id="nsOk" class="primary">追加</button></div>`, (box) => {
+    bindStopForm(box);
     $('nsNo').onclick = closeModal;
-    $('nsOk').onclick = () => { addStop(Object.assign({}, o, { name: $('nsName').value.trim(), memo: $('nsMemo').value.trim(), slot: pickedSlot() }), true); closeModal(); };
+    $('nsOk').onclick = () => {
+      const f = readStopForm(); if (!f) return;
+      const data = Object.assign({}, o, f);
+      addStop(data, true);
+      if (f.fav) saveFavorite(data);
+      closeModal();
+    };
   });
 }
 function editStopDialog(s) {
-  openModal(`<h2>配達先の編集</h2>
-    <label>名前（例：山田様）</label><input id="eName" value="${esc(s.name)}">
-    <label>住所</label><input id="eAddr" value="${esc(s.address)}">
-    <label>メモ（置き場所など）</label><input id="eMemo" value="${esc(s.memo)}">
-    <label>時間帯</label>${slotButtons(s.slot)}
+  openModal(`<h2>配達先の編集</h2>${stopFormHtml(s, false)}
     <p class="small muted">位置を直すときは、一覧の「位置を直す」を押してから地図の印を動かしてください。</p>
-    <div class="modal-btns"><button id="eNo">やめる</button><button id="eOk" class="primary">保存</button></div>`, () => {
+    <div class="modal-btns"><button id="eNo">やめる</button><button id="eOk" class="primary">保存</button></div>`, (box) => {
+    bindStopForm(box);
     $('eNo').onclick = closeModal;
-    bindSlotButtons();
-    $('eOk').onclick = () => { s.name = $('eName').value.trim(); s.address = $('eAddr').value.trim(); s.memo = $('eMemo').value.trim(); if (s.slot !== pickedSlot()) { s.slot = pickedSlot(); const p = plan(); if (p) p.estimate = null; } save(); closeModal(); renderPlan(); renderStops(); };
+    $('eOk').onclick = () => {
+      const f = readStopForm(); if (!f) return;
+      if (s.slot !== f.slot) { const p = plan(); if (p) p.estimate = null; }
+      Object.assign(s, { kind: f.kind, slot: f.slot, temp: f.temp, okihai: f.okihai, name: f.name, address: f.address, memo: f.memo });
+      updateFavoriteFromStop(s);
+      save(); closeModal(); renderPlan(); renderStops();
+    };
   });
 }
-function routeSettingsDialog() {
-  const st = S.settings;
-  openModal(`<h2>出発地と終わり</h2>
-    <label>出発地</label><select id="rsStart"><option value="gps">現在地</option><option value="home" ${st.startMode === 'home' ? 'selected' : ''}>決まった場所${st.home ? '（' + esc(st.home.label) + '）' : '（未設定）'}</option></select>
-    <button id="rsPick" style="margin-top:8px;width:100%">決まった場所を地図で選ぶ</button>
-    <label>終わり</label><select id="rsEnd"><option value="open">最後の配達先で終わる</option><option value="return" ${st.endMode === 'return' ? 'selected' : ''}>出発地に戻る</option></select>
-    <div class="modal-btns"><button id="rsNo">やめる</button><button id="rsOk" class="primary">決定</button></div>`, () => {
-    $('rsNo').onclick = closeModal;
-    $('rsPick').onclick = () => { closeModal(); startPick('出発地をタップしてください', (ll) => { st.home = { lat: ll.lat, lng: ll.lng, label: nearLabel(ll.lat, ll.lng) }; st.startMode = 'home'; save(); renderPlan(); toast('出発地を設定しました'); }); };
-    $('rsOk').onclick = () => { st.startMode = $('rsStart').value === 'home' && st.home ? 'home' : 'gps'; st.endMode = $('rsEnd').value; if (plan()) plan().estimate = null; save(); closeModal(); renderPlan(); };
+
+/* ---------- よく使う住所 ---------- */
+const favKey = (o) => normAddr((o.address || '') + '|' + (o.name || ''));
+function findFavorite(o) {
+  return S.favorites.find((f) => favKey(f) === favKey(o)) ||
+    S.favorites.find((f) => (f.name || '') === (o.name || '') && GC.hav(f.lat, f.lng, o.lat, o.lng) < 15);
+}
+function saveFavorite(o) {
+  const ex = findFavorite(o);
+  const fields = { address: o.address || '', name: o.name || '', lat: o.lat, lng: o.lng, okihai: o.okihai || '', temp: o.temp || '', kind: o.kind || 'deliver', memo: o.memo || '' };
+  if (ex) { Object.assign(ex, fields); ex.uses = (ex.uses || 0) + 1; ex.last = Date.now(); }
+  else S.favorites.push(Object.assign({ id: uid(), uses: 1, last: Date.now() }, fields));
+  save();
+}
+function updateFavoriteFromStop(s) {
+  const ex = s.favId ? S.favorites.find((f) => f.id === s.favId) : findFavorite(s);
+  if (ex) { Object.assign(ex, { address: s.address, name: s.name, okihai: s.okihai, temp: s.temp, kind: s.kind, memo: s.memo, lat: s.lat, lng: s.lng }); save(); }
+}
+function favList(filter) {
+  const q = normAddr(filter || '');
+  return S.favorites.filter((f) => !q || normAddr(f.name + f.address + f.memo).includes(q))
+    .sort((a, b) => (b.uses || 0) - (a.uses || 0) || (b.last || 0) - (a.last || 0));
+}
+function favRow(f) {
+  return `<div class="result fav" data-fav="${f.id}"><b>${esc(f.name || f.address)}</b>${f.name ? `<div class="small muted">${esc(f.address)}</div>` : ''}
+    <div class="tags">${stopTags(f)}</div></div>`;
+}
+function favManager() {
+  const draw = () => {
+    const list = favList($('fmQ') ? $('fmQ').value : '');
+    $('fmList').innerHTML = list.length ? list.map((f) => `<div class="stop"><div class="body"><div class="name">${esc(f.name || f.address)}</div>${f.name ? `<div class="addr">${esc(f.address)}</div>` : ''}${f.memo ? `<div class="addr">📝 ${esc(f.memo)}</div>` : ''}<div class="tags">${stopTags(f)}</div></div>
+      <div style="display:flex;flex-direction:column;gap:4px"><button data-fe="${f.id}">編集</button><button data-fd="${f.id}" class="danger">削除</button></div></div>`).join('') : '<p class="muted">まだありません。配達先を登録すると、自動でここに入ります。</p>';
+    $('fmList').querySelectorAll('[data-fe]').forEach((b) => { b.onclick = () => favEdit(S.favorites.find((x) => x.id === b.dataset.fe)); });
+    $('fmList').querySelectorAll('[data-fd]').forEach((b) => { b.onclick = async () => { const f = S.favorites.find((x) => x.id === b.dataset.fd); if (await ask(`「${f.name || f.address}」をよく使う住所から削除しますか？`, '削除', true)) { S.favorites = S.favorites.filter((x) => x.id !== f.id); save(); } favManager(); }; });
+  };
+  openModal(`<h2>よく使う住所（${S.favorites.length}件）</h2><input id="fmQ" placeholder="名前や住所で絞り込み"><div id="fmList"></div>
+    <div class="modal-btns"><button id="fmClose">閉じる</button></div>`, () => { $('fmClose').onclick = () => { closeModal(); if (!$('pane-add').classList.contains('hidden')) renderAdd(); }; $('fmQ').oninput = draw; draw(); });
+}
+function favEdit(f) {
+  openModal(`<h2>よく使う住所の編集</h2>${stopFormHtml(f, false).replace(/<label>時間帯<\/label>[\s\S]*?<\/div>/, '')}
+    <div class="modal-btns"><button id="feNo">戻る</button><button id="feOk" class="primary">保存</button></div>`, (box) => {
+    bindStopForm(box);
+    $('feNo').onclick = favManager;
+    $('feOk').onclick = () => { const v = readStopForm(); if (!v) return; Object.assign(f, { kind: v.kind, temp: v.temp, okihai: v.okihai, name: v.name, address: v.address, memo: v.memo }); save(); toast('保存しました'); favManager(); };
   });
 }
 
 /* ---------- 地点を追加 ---------- */
 function renderAdd() {
+  const towns = ADDR.filter((a) => a.city === HOME_AREA.city && a.group === HOME_AREA.town);
+  const lastTown = S.settings.lastTown || '氷ノ田';
+  const favs = favList('').slice(0, 30);
   $('pane-add').innerHTML = `
-    <label>住所や地名で探す</label>
-    <div class="row"><input id="aQ" placeholder="例：長野市信更町氷ノ田 123" enterkeyhint="search"><button id="aGo" class="primary" style="flex:0 0 auto">検索</button></div>
-    <div class="small muted" style="margin-top:4px">オンラインなら番地まで、オフラインでは町名まで探せます。</div>
+    <h3>住所を選んで追加</h3>
+    <div class="row"><b style="flex:0 0 auto">${esc(HOME_AREA.city + HOME_AREA.town)}</b><select id="adTown">${towns.map((t) => `<option ${t.leaf === lastTown ? 'selected' : ''}>${esc(t.leaf)}</option>`).join('')}</select></div>
+    <label>番地</label>${withMic('<input id="adNum" inputmode="text" placeholder="例：1234-5">', 'adNum')}
+    <label>名前</label>${withMic('<input id="adName" placeholder="例：山田様">', 'adName')}
+    <button id="adGo" class="primary" style="width:100%;margin-top:10px">この住所で追加</button>
+    <h3>よく使う住所（${S.favorites.length}件）</h3>
+    ${S.favorites.length ? `${withMic('<input id="fvQ" placeholder="名前や住所で探す">', 'fvQ')}<div id="fvList">${favs.map(favRow).join('')}</div><button id="fvManage" style="width:100%;margin-top:8px">よく使う住所を編集する</button>` : '<p class="small muted">一度登録した住所は、自動でここに入ります。次からはタップするだけで追加できます。</p>'}
+    <h3>ほかの方法で探す</h3>
+    ${withMic('<input id="aQ" placeholder="ほかの地域の住所や地名" enterkeyhint="search">', 'aQ')}
+    <button id="aGo" style="width:100%;margin-top:6px">検索</button>
     <div id="aRes"></div>
-    <h3>ほかの追加方法</h3>
-    <div class="btngrid"><button id="aMap">地図をタップして追加</button><button id="aHere">今いる場所を追加</button><button id="aBulk">まとめて登録</button><button id="aHz">注意地点を追加</button></div>`;
+    <div class="btngrid" style="margin-top:10px"><button id="aMap">地図をタップして追加</button><button id="aHere">今いる場所を追加</button><button id="aBulk">まとめて登録</button><button id="aHz">注意地点を追加</button></div>`;
+  bindMics($('pane-add'));
+  $('adGo').onclick = async () => {
+    const town = $('adTown').value, num = $('adNum').value.trim().normalize('NFKC'), name = $('adName').value.trim();
+    S.settings.lastTown = town; save();
+    const address = HOME_AREA.city + HOME_AREA.town + town + (num ? ' ' + num : '');
+    const base = towns.find((t) => t.leaf === town);
+    let pos = { lat: base.lat, lng: base.lng, approx: true };
+    if (num && isOnline()) {
+      $('adGo').disabled = true; $('adGo').textContent = '場所を調べています…';
+      const on = await onlineSearch(address.replace(' ', ''));
+      const hit = on.find((r) => r.label.includes(town) && /\d/.test(r.label));
+      if (hit) pos = { lat: hit.lat, lng: hit.lng, approx: false };
+      $('adGo').disabled = false; $('adGo').textContent = 'この住所で追加';
+    }
+    const fav = findFavorite({ address, name, lat: pos.lat, lng: pos.lng });
+    map.setView([pos.lat, pos.lng], 17);
+    newStopDialog(Object.assign({ address, name }, fav ? { okihai: fav.okihai, temp: fav.temp, kind: fav.kind, memo: fav.memo, lat: fav.lat, lng: fav.lng, approx: false, favId: fav.id } : pos));
+    if (pos.approx && !fav) toast('番地の位置までは分からないため、地名の中心に置きます。あとで「位置を直す」で直せます', 6000);
+  };
+  const bindFavRows = () => document.querySelectorAll('#fvList [data-fav]').forEach((d) => {
+    d.onclick = () => { const f = S.favorites.find((x) => x.id === d.dataset.fav); map.setView([f.lat, f.lng], 17); newStopDialog({ fromFav: true, favId: f.id, address: f.address, name: f.name, lat: f.lat, lng: f.lng, okihai: f.okihai, temp: f.temp, kind: f.kind, memo: f.memo }); };
+  });
+  bindFavRows();
+  if ($('fvQ')) $('fvQ').oninput = () => { $('fvList').innerHTML = favList($('fvQ').value).slice(0, 30).map(favRow).join('') || '<p class="muted">見つかりません</p>'; bindFavRows(); };
+  if ($('fvManage')) $('fvManage').onclick = favManager;
   const go = async () => {
     const q = $('aQ').value.trim(); if (!q) return;
     $('aRes').innerHTML = '<p class="muted">検索中…</p>';
@@ -499,10 +626,24 @@ function renderAdd() {
   $('aBulk').onclick = bulkDialog;
   $('aHz').onclick = () => startPick('注意地点をタップしてください', hazardDialog);
 }
+
+function routeSettingsDialog() {
+  const st = S.settings;
+  openModal(`<h2>出発地と終わり</h2>
+    <label>出発地</label><select id="rsStart"><option value="gps">現在地</option><option value="home" ${st.startMode === 'home' ? 'selected' : ''}>決まった場所${st.home ? '（' + esc(st.home.label) + '）' : '（未設定）'}</option></select>
+    <button id="rsPick" style="margin-top:8px;width:100%">決まった場所を地図で選ぶ</button>
+    <label>終わり</label><select id="rsEnd"><option value="open">最後の配達先で終わる</option><option value="return" ${st.endMode === 'return' ? 'selected' : ''}>出発地に戻る</option></select>
+    <div class="modal-btns"><button id="rsNo">やめる</button><button id="rsOk" class="primary">決定</button></div>`, () => {
+    $('rsNo').onclick = closeModal;
+    $('rsPick').onclick = () => { closeModal(); startPick('出発地をタップしてください', (ll) => { st.home = { lat: ll.lat, lng: ll.lng, label: nearLabel(ll.lat, ll.lng) }; st.startMode = 'home'; save(); renderPlan(); toast('出発地を設定しました'); }); };
+    $('rsOk').onclick = () => { st.startMode = $('rsStart').value === 'home' && st.home ? 'home' : 'gps'; st.endMode = $('rsEnd').value; if (plan()) plan().estimate = null; save(); closeModal(); renderPlan(); };
+  });
+}
+
 function bulkDialog() {
   openModal(`<h2>まとめて登録</h2>
-    <p class="small muted">1行に1件。「住所, 名前, メモ」の順に、カンマで区切って書けます（名前とメモはなくても大丈夫）。メモに「午前」「14-16」などと書くと時間帯も入ります。</p>
-    <textarea id="bkText" placeholder="長野市篠ノ井布施高田 123, 山田様, 玄関前&#10;長野市信更町氷ノ田 45"></textarea>
+    <p class="small muted">1行に1件。「住所, 名前, メモ」の順に、カンマで区切って書けます（名前とメモはなくても大丈夫）。メモに「午前」「14-16」「冷凍」「集荷」「置き配」「置き配不可」などと書くと、その印も付きます。</p>
+    <textarea id="bkText" placeholder="長野市信更町氷ノ田 123, 山田様, 午前 冷凍 置き配不可&#10;長野市信更町灰原 45, 佐藤様, 置き配 玄関前"></textarea>
     <div class="progress hidden" id="bkProg"><div></div></div><div id="bkMsg" class="small"></div>
     <div class="modal-btns"><button id="bkNo">閉じる</button><button id="bkOk" class="primary">登録する</button></div>`, () => {
     $('bkNo').onclick = closeModal;
@@ -514,7 +655,7 @@ function bulkDialog() {
       for (let i = 0; i < lines.length; i++) {
         const parts = lines[i].split(/[,，、\t]/).map((x) => x.trim());
         const r = await geocode(parts[0]);
-        if (r) { addStop({ address: parts[0], name: parts[1] || '', memo: parts.slice(2).join(' '), slot: slotFromText(parts.slice(1).join(' ')), lat: r.lat, lng: r.lng, approx: r.approx }); ok++; if (r.approx) approx++; }
+        if (r) { addStop({ address: parts[0], name: parts[1] || '', memo: parts.slice(2).join(' '), slot: slotFromText(parts.slice(1).join(' ')), kind: /集荷/.test(lines[i]) ? 'pickup' : 'deliver', temp: /冷凍/.test(lines[i]) ? 'frozen' : /冷蔵/.test(lines[i]) ? 'chill' : '', okihai: /置き?配\s*(不可|NG|ダメ)/i.test(lines[i]) ? 'ng' : /置き?配/.test(lines[i]) ? 'ok' : '', lat: r.lat, lng: r.lng, approx: r.approx }); ok++; if (r.approx) approx++; }
         else fail.push(parts[0]);
         $('bkProg').firstElementChild.style.width = ((i + 1) / lines.length * 100) + '%';
         $('bkMsg').textContent = `${i + 1}/${lines.length} 件を処理`;
@@ -673,11 +814,13 @@ function updateNav() {
   }
   const remain = Math.max(0, r.distance - along);
   const eta = r.distance > 0 ? r.duration * remain / r.distance : 0;
-  $('nvSub').textContent = `残り ${fmtDist(remain)}・約${fmtDur(eta)}${target.slot ? '　⏰' + slotOf(target.slot).label : ''}${target.memo ? '　📝' + target.memo : ''}`;
+  $('nvSub').textContent = `残り ${fmtDist(remain)}・約${fmtDur(eta)}`;
+  $('nvDone').textContent = target.kind === 'pickup' ? '集荷完了 → 次へ' : '配達完了 → 次へ';
+  $('nvTags').innerHTML = stopTags(target) + (target.memo ? `<div class="nvmemo">📝 ${esc(target.memo)}</div>` : '');
   // 到着
   if (toTarget < 40 || remain < 25) {
     setBanner('arrive', fmtDist(toTarget), '目的地付近です');
-    if (!nav.arrived) { nav.arrived = true; speak(`まもなく、${stopLabel(target)}です。${target.memo ? 'メモ、' + target.memo + '。' : ''}配達が終わったら完了を押してください`); }
+    if (!nav.arrived) { nav.arrived = true; speak(`まもなく、${stopLabel(target)}です。${target.kind === 'pickup' ? '集荷です。' : ''}${target.temp === 'frozen' ? '冷凍です。' : target.temp === 'chill' ? '冷蔵です。' : ''}${target.okihai === 'ng' ? '置き配はできません。' : target.okihai === 'ok' ? '置き配できます。' : ''}${target.memo ? target.memo + '。' : ''}終わったら完了を押してください`); }
     return;
   }
   // 次の案内
@@ -718,7 +861,7 @@ async function navDone(status) {
   if (next < 0) return finishAll();
   nav.idx = next; nav.follow = true; $('btnFollow').classList.add('hidden');
   renderStops();
-  speak(`次は、${stopLabel(p.stops[next])}です`);
+  speak(`次は、${stopLabel(p.stops[next])}です${p.stops[next].kind === 'pickup' ? '。集荷です' : ''}`);
   if (nav.sim && nav.route) nav.simPos = nav.simPos || null;
   await routeToCurrent(false);
 }
@@ -800,12 +943,12 @@ async function downloadTiles() {
 }
 async function buildRoads() {
   if (!navigator.onLine) return toast('インターネットにつないでから行ってください');
-  if (S.graphMeta && !(await ask('道路データを作り直しますか？（10〜20分ほどかかることがあります）', '作り直す'))) return;
+  if (S.graphMeta && !(await ask('道路データを作り直しますか？（数分〜20分ほどかかることがあります）', '作り直す'))) return;
   try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* なし */ }
   $('rdBuild').disabled = true; $('rdProg').classList.remove('hidden');
   keepAwake();
   try {
-    S.graphMeta = await call('build', { bbox: Object.assign({ rows: 3, cols: 3 }, S.settings.area) }, (pr) => {
+    S.graphMeta = await call('build', { bbox: Object.assign({ rows: Math.max(1, Math.ceil((S.settings.area.n - S.settings.area.s) / 0.14)), cols: Math.max(1, Math.ceil((S.settings.area.e - S.settings.area.w) / 0.15)) }, S.settings.area) }, (pr) => {
       if (pr.total) $('rdBar').style.width = (pr.done / pr.total * 100) + '%';
       $('rdMsg').textContent = pr.msg || '';
     });
@@ -818,7 +961,7 @@ async function buildRoads() {
 }
 async function renderSettings() {
   const st = S.settings, a = st.area;
-  const n15 = countTiles(a, 15), n16 = countTiles(a, 16);
+  const nz = (z) => countTiles(a, z), zopt = (z, label) => `<option value="${z}" ${st.maxZoom === z ? 'selected' : ''}>${label}（約${nz(z).toLocaleString()}枚・約${Math.round(nz(z) * 0.018)}MB）</option>`;
   let tileCount = '…', usage = '';
   const el = $('pane-settings');
   el.innerHTML = `
@@ -827,9 +970,9 @@ async function renderSettings() {
     <h3>オフライン準備</h3>
     <p class="small muted">家のWi-Fiなど、つながる所で一度行えば、電波がなくても地図とルート案内が使えます。</p>
     <div class="status-line">範囲：<b id="stArea">${esc(a.name || '指定した範囲')}</b></div>
-    <div class="row"><button id="stAreaView">今見ている範囲にする</button><button id="stAreaPreset">長野市とその周辺に戻す</button></div>
+    <div class="btngrid"><button id="stAreaShinko">信更町とその周辺</button><button id="stAreaPreset">長野市とその周辺</button><button id="stAreaView" style="grid-column:1/-1">今見ている範囲にする</button></div>
     <label>地図の細かさ（どこまで拡大して見られるか）</label>
-    <select id="stZoom"><option value="15" ${st.maxZoom === 15 ? 'selected' : ''}>ふつう（約${n15.toLocaleString()}枚・約${Math.round(n15 * 0.018)}MB）</option><option value="16" ${st.maxZoom === 16 ? 'selected' : ''}>細かい（約${n16.toLocaleString()}枚・約${Math.round(n16 * 0.018)}MB）おすすめ</option></select>
+    <select id="stZoom">${zopt(15, 'ふつう')}${zopt(16, '細かい')}${zopt(17, 'とても細かい（家の形まで）')}</select>
     <div class="status-line" style="margin-top:10px">① 地図：保存済み <b id="stTiles">${tileCount}</b> 枚</div>
     <button id="dlTiles" class="primary" style="width:100%">地図をダウンロード</button>
     <div class="progress"><div id="dlBar"></div></div><div id="dlMsg" class="small muted"></div>
@@ -840,6 +983,11 @@ async function renderSettings() {
     <label style="display:flex;gap:10px;align-items:center;color:var(--text)"><input type="checkbox" id="stAuto" style="width:24px;height:24px" ${st.autoCache ? 'checked' : ''}> 見た地図も自動で保存する</label>
     <h3>音声案内</h3>
     <div class="row"><button id="stVoice">${st.speech ? '🔊 音声あり' : '🔇 音声なし'}</button><button id="stVoiceTest">試しに話す</button></div>
+    <h3>音声入力</h3>
+    <p class="small muted">入力欄の横に🎤ボタンを出します。押して話すと文字になります。</p>
+    <button id="stMic" style="width:100%">${st.voiceInput ? '🎤 音声入力ボタン：表示する' : '音声入力ボタン：表示しない'}</button>
+    <h3>よく使う住所（${S.favorites.length}件）</h3>
+    <button id="stFav" style="width:100%">よく使う住所を編集する</button>
     <h3>注意地点（${S.hazards.length}件）</h3>
     <p class="small muted">凍結しやすい所やチェーンを着けた所を登録すると、ナビ中に近づいたら知らせます。地図の長押しでも追加できます。</p>
     <button id="stHz" style="width:100%">地図をタップして追加</button>
@@ -851,7 +999,10 @@ async function renderSettings() {
     <p class="small muted">地図：国土地理院。道路データ：© OpenStreetMap contributors（ODbL）。住所データ：Geolonia 住所データ（CC BY 4.0、国土交通省 位置参照情報をもとに作成）。地図表示：Leaflet。<br>道路データは実際の通行規制と違うことがあります。必ず実際の道路標識に従ってください。</p>`;
   $('stSrc').onchange = (e) => { st.mapSource = e.target.value; save(); setBaseLayer(); renderSettings(); };
   $('stAreaView').onclick = () => { const b = map.getBounds(); st.area = { name: '指定した範囲', s: +b.getSouth().toFixed(4), w: +b.getWest().toFixed(4), n: +b.getNorth().toFixed(4), e: +b.getEast().toFixed(4) }; save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
-  $('stAreaPreset').onclick = () => { st.area = Object.assign({}, PRESET_AREAS.nagano); save(); renderSettings(); };
+  $('stAreaPreset').onclick = () => { st.area = Object.assign({}, PRESET_AREAS.nagano); save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
+  $('stAreaShinko').onclick = () => { st.area = Object.assign({}, PRESET_AREAS.shinko); save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
+  $('stMic').onclick = () => { st.voiceInput = !st.voiceInput; save(); renderSettings(); };
+  $('stFav').onclick = favManager;
   $('stZoom').onchange = (e) => { st.maxZoom = +e.target.value; save(); };
   $('dlTiles').onclick = downloadTiles;
   if (dl) $('dlTiles').textContent = '中断する';
@@ -867,7 +1018,7 @@ async function renderSettings() {
   if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then((e) => { const u = $('stUsage'); if (u) u.innerHTML = `端末の使用量：<b>${Math.round(e.usage / 1048576)}MB</b>（使える目安 ${Math.round(e.quota / 1048576).toLocaleString()}MB）`; });
 }
 function exportDialog() {
-  const txt = JSON.stringify({ app: 'haitatsu-navi', v: 1, plans: S.plans, hazards: S.hazards, settings: S.settings });
+  const txt = JSON.stringify({ app: 'haitatsu-navi', v: 1, plans: S.plans, hazards: S.hazards, favorites: S.favorites, settings: S.settings });
   openModal(`<h2>データの控え</h2><p class="small muted">下の文字をコピーして、メモアプリなどに貼り付けて保存してください。</p><textarea id="exTxt" readonly>${esc(txt)}</textarea>
     <div class="modal-btns"><button id="exNo">閉じる</button><button id="exCopy" class="primary">コピー</button></div>`, () => {
     $('exNo').onclick = closeModal;
@@ -875,14 +1026,14 @@ function exportDialog() {
   });
 }
 function importDialog() {
-  openModal(`<h2>控えから戻す</h2><p class="small muted">保存しておいた控えの文字を貼り付けてください。今のプランと注意地点は置き換わります。</p><textarea id="imTxt"></textarea>
+  openModal(`<h2>控えから戻す</h2><p class="small muted">保存しておいた控えの文字を貼り付けてください。今のプラン・注意地点・よく使う住所は置き換わります。</p><textarea id="imTxt"></textarea>
     <div class="modal-btns"><button id="imNo">やめる</button><button id="imOk" class="primary">戻す</button></div>`, () => {
     $('imNo').onclick = closeModal;
     $('imOk').onclick = () => {
       try {
         const d = JSON.parse($('imTxt').value);
         if (d.app !== 'haitatsu-navi') throw new Error('形式が違います');
-        S.plans = d.plans || []; S.hazards = d.hazards || []; if (d.settings) Object.assign(S.settings, d.settings);
+        S.plans = d.plans || []; S.hazards = d.hazards || []; S.favorites = d.favorites || []; if (d.settings) Object.assign(S.settings, d.settings);
         S.planId = S.plans[0] ? S.plans[0].id : null; save(); closeModal(); renderAll(); toast('戻しました');
       } catch (e) { toast('戻せませんでした：' + e.message); }
     };
@@ -915,7 +1066,8 @@ async function boot() {
   updateNet();
   try {
     const st = await DB.get('kv', 'state');
-    if (st) { Object.assign(S.settings, st.settings || {}); S.plans = st.plans || []; S.planId = st.planId; S.hazards = st.hazards || []; }
+    if (st) { Object.assign(S.settings, st.settings || {}); S.plans = st.plans || []; S.planId = st.planId; S.hazards = st.hazards || []; S.favorites = st.favorites || [];
+      if (!st.settings || !st.settings.v) { S.settings.v = 2; S.settings.area = Object.assign({}, PRESET_AREAS.shinko); S.settings.maxZoom = 17; if (S.settings.voiceInput === undefined) S.settings.voiceInput = true; } }
   } catch (e) { toast('この端末ではデータを保存できないようです'); }
   if (!plan() && S.plans[0]) S.planId = S.plans[0].id;
   setBaseLayer();
