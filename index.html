@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>配達ナビ</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="配達ナビ">
+<meta name="theme-color" content="#14213d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="leaflet.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="map"></div>
+
+<!-- ナビ中の案内表示 -->
+<div id="navBanner" class="hidden">
+  <div class="nb-arrow"><svg id="nbArrow" viewBox="0 0 100 100"><path id="nbArrowPath" d=""/></svg></div>
+  <div class="nb-main">
+    <div class="nb-dist" id="nbDist">--</div>
+    <div class="nb-text" id="nbText">ルートを計算中…</div>
+  </div>
+</div>
+
+<!-- 右上のボタン -->
+<div id="hud">
+  <button id="btnLocate" class="round" title="現在地">◎</button>
+  <button id="btnLayers" class="round" title="地図の種類">▤</button>
+  <div id="netState" class="pill">オンライン</div>
+</div>
+
+<!-- 地図タップで追加するモードの案内 -->
+<div id="pickBar" class="hidden"><span id="pickText">地図をタップして地点を選んでください</span><button id="pickCancel">やめる</button></div>
+
+<!-- 下のパネル -->
+<div id="sheet">
+  <div class="sheet-handle" id="sheetHandle"><span></span></div>
+  <div class="tabs">
+    <button data-tab="plan" class="active">プラン</button>
+    <button data-tab="add">地点を追加</button>
+    <button data-tab="settings">設定</button>
+  </div>
+  <div class="pane" id="pane-plan"></div>
+  <div class="pane hidden" id="pane-add"></div>
+  <div class="pane hidden" id="pane-settings"></div>
+</div>
+
+<!-- ナビ中の下部 -->
+<div id="navBar" class="hidden">
+  <div class="nv-info">
+    <div class="nv-next" id="nvNext">--</div>
+    <div class="nv-sub" id="nvSub">--</div>
+  </div>
+  <div class="nv-btns">
+    <button id="nvDone" class="big ok">配達完了 → 次へ</button>
+    <button id="nvSkip">あとで</button>
+    <button id="nvExt">Gマップ</button>
+    <button id="nvVoice">🔊</button>
+    <button id="nvEnd" class="danger">終了</button>
+  </div>
+</div>
+<button id="btnFollow" class="round hidden" title="現在地に戻る">◎</button>
+
+<div id="modal" class="hidden"><div class="modal-box" id="modalBox"></div></div>
+<div id="toast" class="hidden"></div>
+
+<script src="leaflet.js"></script>
+<script src="db.js"></script>
+<script src="graph-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
