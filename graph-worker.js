@@ -91,7 +91,7 @@ function optimize(id, opts) {
   progress(id, { stage: 'tsp', msg: '回る順番を考えています…' });
   var endIdx = opts.end === 'return' ? 0 : -1;
   var budget = Math.min(6000, 1500 + n * 40);
-  var order = GC.solveGrouped(M, n, 0, opts.stops.map(function (s) { return { rank: s.rank == null ? -1 : s.rank, priority: !!s.priority }; }), endIdx, budget);
+  var order = GC.orderByMode(M, n, 0, opts.stops.map(function (s) { return { rank: s.rank == null ? -1 : s.rank, priority: !!s.priority }; }), endIdx, opts.mode || 'slot', budget);
   // 区間ごとの時間
   var legs = [], prev = 0, total = 0;
   order.forEach(function (k) { var s = M[prev * n + k]; legs.push(s); total += s; prev = k; });

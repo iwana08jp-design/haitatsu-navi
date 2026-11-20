@@ -5,7 +5,13 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第10版（2026年11月21日）';
+const APP_VERSION = '第11版（2026年11月21日）';
+const ROUTE_MODES = [
+  { k: 'best', label: '最適ルート', desc: '時間指定は気にせず、全体で一番早く回れる順番' },
+  { k: 'slot', label: '時間指定を優先', desc: '午前中 → 14〜16時 → 16〜18時 → 19〜21時の順に、その中で早い順番' },
+  { k: 'near', label: '近い順', desc: '出発地から近い所を先に、次々と一番近い所へ' },
+  { k: 'far', label: '遠い順', desc: '一番遠い所へ先に行き、戻りながら近い所へ' }
+];
 
 /* ---------- 地図の種類（ゼンリン契約後にここへ追加） ---------- */
 const MAP_SOURCES = {
@@ -95,10 +101,23 @@ function undoToast(msg, onUndo) {
   clearTimeout(undoTimer); undoTimer = setTimeout(() => bar.classList.add('hidden'), 8000);
 }
 function openModal(html, onReady) {
-  $('modalBox').innerHTML = html; $('modal').classList.remove('hidden');
+  $('modal').classList.remove('mini');
+  $('modalBox').innerHTML = `<div class="modal-handle" id="mHandle"><span></span><em>▼ 下げて地図を見る</em></div>` + html; $('modal').classList.remove('hidden');
+  const h = $('mHandle');
+  h.onclick = () => { const mini = $('modal').classList.toggle('mini'); h.querySelector('em').textContent = mini ? '▲ 入力に戻る' : '▼ 下げて地図を見る'; if (mini) { $('modalBox').scrollTop = 0; $('sheet').classList.add('collapsed'); } };
+  swipe(h, () => { if (!$('modal').classList.contains('mini')) h.onclick(); }, () => { if ($('modal').classList.contains('mini')) h.onclick(); });
   if (onReady) onReady($('modalBox'));
 }
-function closeModal() { $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
+function closeModal() { $('modal').classList.add('hidden'); $('modal').classList.remove('mini'); $('modalBox').innerHTML = ''; }
+/* 上下に指でなぞったとき */
+function swipe(el, onDown, onUp) {
+  let y0 = null;
+  el.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener('touchend', (e) => {
+    if (y0 == null) return; const dy = e.changedTouches[0].clientY - y0; y0 = null;
+    if (dy > 40) { onDown(); e.preventDefault(); } else if (dy < -40) { onUp(); e.preventDefault(); }
+  });
+}
 function ask(text, okLabel, danger) {
   return new Promise((res) => {
     openModal(`<h2>確認</h2><p>${esc(text)}</p><div class="modal-btns"><button id="mNo">やめる</button><button id="mYes" class="${danger ? 'danger' : 'primary'}">${esc(okLabel || 'OK')}</button></div>`, () => {
@@ -387,7 +406,7 @@ function renderPlan() {
     <div class="summary" style="margin-top:8px">
       <div><b>${total}</b> 件　完了 ${done}　残り ${total - done}</div>
       ${p.stops.some((s) => s.collect > 0) ? `<div class="small">💴 コレクト 合計 ${p.stops.reduce((a, s) => a + (s.collect || 0), 0).toLocaleString()}円（受け取り済み ${p.stops.filter((s) => s.status === 'done').reduce((a, s) => a + (s.collect || 0), 0).toLocaleString()}円）</div>` : ''}
-      <div class="small">${p.estimate ? `回る時間の目安 約${fmtDur(p.estimate.totalSec)}（${p.estimate.road ? '道路データで計算' : '直線距離で概算'}）` : '「順番を決める」で回る順番を自動で決めます'}</div>
+      <div class="small">${p.estimate ? `${p.estimate.mode ? '「' + ((ROUTE_MODES.find((m) => m.k === p.estimate.mode) || {}).label || '') + '」' : ''}回る時間の目安 約${fmtDur(p.estimate.totalSec)}（${p.estimate.road ? '道路データで計算' : '直線距離で概算'}）` : '「順番を決める」で回る順番を自動で決めます'}</div>
     </div>
     <div class="btngrid">
       <button class="accent" id="pOpt" ${total - done < 2 ? 'disabled' : ''}>順番を決める</button>
@@ -848,10 +867,19 @@ function bulkDialog() {
 }
 
 /* ---------- 順番を決める ---------- */
-async function optimizePlan() {
+function optimizePlan() {
+  const p = plan(); if (!p) return;
+  if (p.stops.filter((s) => s.status !== 'done').length < 2) return toast('2件以上必要です');
+  const cur = S.settings.routeMode || 'slot';
+  openModal(`<h2>回り方を選んでください</h2>${ROUTE_MODES.map((m) => `<button class="mode-btn ${m.k === cur ? 'on' : ''}" data-mode="${m.k}"><b>${m.label}</b><span>${m.desc}</span></button>`).join('')}
+    <div class="modal-btns"><button id="rmNo">やめる</button></div>`, (box) => {
+    $('rmNo').onclick = closeModal;
+    box.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => { S.settings.routeMode = b.dataset.mode; save(); closeModal(); runOptimize(b.dataset.mode); }; });
+  });
+}
+async function runOptimize(mode) {
   const p = plan(); if (!p) return;
   const todo = p.stops.filter((s) => s.status !== 'done');
-  if (todo.length < 2) return toast('2件以上必要です');
   let start;
   if (S.settings.startMode === 'home' && S.settings.home) start = S.settings.home;
   else { toast('現在地を確認しています…'); start = await getPos(10000); }
@@ -860,33 +888,33 @@ async function optimizePlan() {
   let res, road = false;
   try {
     if (S.graphMeta) {
-      res = await call('optimize', { opts: { start: { lat: start.lat, lng: start.lng }, stops: todo.map((s) => ({ lat: s.lat, lng: s.lng, priority: s.priority, rank: slotRank(s.slot) })), end: S.settings.endMode } }, (pr) => {
+      res = await call('optimize', { opts: { start: { lat: start.lat, lng: start.lng }, stops: todo.map((s) => ({ lat: s.lat, lng: s.lng, priority: s.priority, rank: slotRank(s.slot) })), end: S.settings.endMode, mode } }, (pr) => {
         if (pr.total) $('opBar').style.width = (pr.done / pr.total * 100) + '%';
         $('opMsg').textContent = pr.msg || '';
       });
       road = true;
     } else {
-      res = straightOptimize(start, todo);
+      res = straightOptimize(start, todo, mode);
     }
   } catch (e) { closeModal(); return toast('計算できませんでした：' + e.message, 5000); }
   closeModal();
   const ordered = res.order.map((k) => todo[k]);
   p.stops = p.stops.filter((s) => s.status === 'done').concat(ordered);
-  p.estimate = { totalSec: res.totalSec, road, at: Date.now() };
+  p.estimate = { totalSec: res.totalSec, road, mode, at: Date.now() };
   save(); renderPlan(); renderStops();
   const far = (res.snapDist || []).slice(1).map((d, k) => (d != null && d > 300 ? todo[k] : null)).filter(Boolean);
-  let msg = `順番を決めました。目安 約${fmtDur(res.totalSec)}`;
+  let msg = `「${(ROUTE_MODES.find((m) => m.k === mode) || {}).label}」で順番を決めました。目安 約${fmtDur(res.totalSec)}`;
   if (!road) msg += '（道路データがないため直線距離で概算）';
   if (far.length) msg += `。道路から300m以上離れた地点が${far.length}件あります`;
   toast(msg, 5000);
   const b = L.latLngBounds(ordered.map((s) => [s.lat, s.lng]).concat([[start.lat, start.lng]]));
   map.fitBounds(b, { padding: [30, 30] });
 }
-function straightOptimize(start, stops) {
+function straightOptimize(start, stops, mode) {
   const pts = [start].concat(stops), n = pts.length, M = new Float64Array(n * n);
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) M[i * n + j] = GC.hav(pts[i].lat, pts[i].lng, pts[j].lat, pts[j].lng) * 1.4 / 8.3;
   const end = S.settings.endMode === 'return' ? 0 : -1;
-  const order = GC.solveGrouped(M, n, 0, stops.map((s) => ({ rank: slotRank(s.slot), priority: !!s.priority })), end, 1500);
+  const order = GC.orderByMode(M, n, 0, stops.map((s) => ({ rank: slotRank(s.slot), priority: !!s.priority })), end, mode || 'slot', 1500);
   let tot = 0, prev = 0; order.forEach((k) => { tot += M[prev * n + k]; prev = k; }); if (end === 0) tot += M[prev * n];
   return { order: order.map((k) => k - 1), totalSec: tot };
 }
@@ -1308,6 +1336,7 @@ async function boot() {
 
   document.querySelectorAll('.tabs button').forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
   $('sheetHandle').onclick = () => $('sheet').classList.toggle('collapsed');
+  [$('sheetHandle'), document.querySelector('.tabs')].forEach((el) => swipe(el, () => $('sheet').classList.add('collapsed'), () => $('sheet').classList.remove('collapsed')));
   $('btnLocate').onclick = () => { S.locateOnce = true; startGeo(); if (S.pos) onPosition(S.pos); };
   $('btnLayers').onclick = layersDialog;
   $('btnDraw').onclick = startDraw;

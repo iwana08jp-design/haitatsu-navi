@@ -580,7 +580,44 @@
     return order;
   }
 
+  /* 回り方を選んで順番を決める
+   * mode: 'best' 最適ルート / 'slot' 時間指定を優先 / 'near' 近い順 / 'far' 遠い順 */
+  function orderByMode(M, n, start, meta, end, mode, budgetMs) {
+    function c(a, b) { return M[a * n + b]; }
+    if (mode === 'slot') return solveGrouped(M, n, start, meta, end, budgetMs);
+    var ids = [], i;
+    for (i = 1; i < n; i++) ids.push(i);
+    var pri = ids.filter(function (k) { return meta[k - 1].priority; });
+    var rest = ids.filter(function (k) { return !meta[k - 1].priority; });
+    function chain(from, list, farFirst) {
+      var left = list.slice(), out = [], cur = from;
+      if (farFirst && left.length) {
+        var bi = 0;
+        for (var k = 1; k < left.length; k++) if (c(start, left[k]) > c(start, left[bi])) bi = k;
+        cur = left[bi]; out.push(cur); left.splice(bi, 1);
+      }
+      while (left.length) {
+        var b = 0;
+        for (var j = 1; j < left.length; j++) if (c(cur, left[j]) < c(cur, left[b])) b = j;
+        cur = left[b]; out.push(cur); left.splice(b, 1);
+      }
+      return out;
+    }
+    var order = [];
+    if (mode === 'best') {
+      if (pri.length) { var t1 = solveTSP(M, n, start, pri, rest.length ? -1 : end, budgetMs / 2); order = t1; }
+      var from = order.length ? order[order.length - 1] : start;
+      if (rest.length) order = order.concat(solveTSP(M, n, from, rest, end, budgetMs / (pri.length ? 2 : 1)));
+      return order;
+    }
+    // 近い順・遠い順（「先に回る」は先頭）
+    var p1 = chain(start, pri, mode === 'far');
+    var from2 = p1.length ? p1[p1.length - 1] : start;
+    return p1.concat(chain(from2, rest, mode === 'far'));
+  }
+
   var api = {
+    orderByMode: orderByMode,
     solveGrouped: solveGrouped,
     SPEED: SPEED, CLASS_NAME: CLASS_NAME, overpassQuery: overpassQuery, splitBbox: splitBbox,
     buildGraph: buildGraph, prepare: prepare, snap: snap, dijkstra: dijkstra, route: route,

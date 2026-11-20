@@ -167,3 +167,16 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 #drawUI .dr-col.on { box-shadow: 0 0 0 3px var(--amber); }
 #drawUI button.on { background: var(--amber); border-color: #e0a000; font-weight: 700; }
 #drawUI .dr-col.on { background: var(--c) !important; border-color: #fff !important; }
+
+.modal-handle { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: -8px -14px 8px; padding: 6px 0 8px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.modal-handle span { width: 46px; height: 5px; border-radius: 3px; background: #b9b3a5; }
+.modal-handle em { font-style: normal; font-size: 14px; color: var(--muted); }
+#modal.mini { background: transparent; pointer-events: none; }
+#modal.mini .modal-box { pointer-events: auto; max-height: calc(64px + var(--safe-bottom)); overflow: hidden; }
+#modal.mini .modal-handle em { color: var(--navy); font-weight: 700; font-size: 16px; }
+.mode-btn { display: block; width: 100%; text-align: left; margin: 6px 0; padding: 12px 14px; }
+.mode-btn b { display: block; font-size: 18px; }
+.mode-btn span { display: block; font-size: 14px; color: var(--muted); margin-top: 2px; }
+.mode-btn.on { border: 3px solid var(--amber); background: #fff8e1; }
+#toast { pointer-events: none; }
+.sheet-handle { height: 28px; flex: 0 0 28px; }
