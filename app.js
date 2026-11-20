@@ -84,6 +84,15 @@ function toast(msg, ms) {
   const t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), ms || 2800);
 }
+let undoTimer;
+function undoToast(msg, onUndo) {
+  let bar = $('undoBar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'undoBar'; document.body.appendChild(bar); }
+  bar.innerHTML = `<span>${esc(msg)}</span><button>元に戻す</button>`;
+  bar.classList.remove('hidden');
+  bar.querySelector('button').onclick = () => { bar.classList.add('hidden'); onUndo(); };
+  clearTimeout(undoTimer); undoTimer = setTimeout(() => bar.classList.add('hidden'), 8000);
+}
 function openModal(html, onReady) {
   $('modalBox').innerHTML = html; $('modal').classList.remove('hidden');
   if (onReady) onReady($('modalBox'));
@@ -332,9 +341,14 @@ function renderStops() {
   const line = [];
   p.stops.forEach((s, i) => {
     const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
-    const m = L.marker([s.lat, s.lng], { draggable: !S.nav && S.dragId === s.id, icon: L.divIcon({ className: '', html: `<div class="pin ${cls} ${s.kind === 'pickup' ? 'pickup' : ''}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}${s.temp ? `<div class="tempb">${s.temp === 'frozen' ? '❄️' : '🧊'}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
+    const m = L.marker([s.lat, s.lng], { draggable: !S.nav, autoPan: true, icon: L.divIcon({ className: '', html: `<div class="pin ${cls} ${s.kind === 'pickup' ? 'pickup' : ''}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}${s.temp ? `<div class="tempb">${s.temp === 'frozen' ? '❄️' : '🧊'}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
     m.on('click', () => { if (S.nav) return; S.expanded = s.id; showTab('plan'); renderPlan(); $('sheet').classList.remove('collapsed'); const el = document.querySelector(`[data-sid="${s.id}"]`); if (el) el.scrollIntoView({ block: 'center' }); });
-    m.on('dragend', () => { const ll = m.getLatLng(); s.lat = ll.lat; s.lng = ll.lng; s.approx = false; p.estimate = null; S.dragId = null; save(); renderPlan(); renderStops(); toast('位置を直しました'); });
+    m.on('dragstart', () => { m._from = { lat: s.lat, lng: s.lng, approx: s.approx }; });
+    m.on('dragend', () => {
+      const ll = m.getLatLng(), from = m._from;
+      s.lat = ll.lat; s.lng = ll.lng; s.approx = false; p.estimate = null; updateFavoriteFromStop(s); save(); renderPlan(); renderStops();
+      undoToast(`${i + 1}番「${stopLabel(s)}」の位置を動かしました`, () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderPlan(); renderStops(); toast('元の位置に戻しました'); });
+    });
     m.addTo(stopLayer);
     if (s.status !== 'done') line.push([s.lat, s.lng]);
   });
@@ -404,7 +418,7 @@ function renderPlan() {
 function stopRow(p, s, i) {
   const nextIdx = nextStopIndex(p);
   const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
-  const tags = [stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
+  const tags = [stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（地図の印を指で動かして修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
   let html = `<div class="stop ${cls}" data-sid="${s.id}"><div class="num">${i + 1}</div><div class="body">
     <div class="name">${esc(stopLabel(s))}</div>${s.name && s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
     ${s.memo ? `<div class="addr">📝 ${esc(s.memo)}</div>` : ''}<div class="tags">${tags}</div></div></div>`;
@@ -413,7 +427,7 @@ function stopRow(p, s, i) {
       <button data-act="show" data-id="${s.id}">地図で見る</button>
       <button data-act="up" data-id="${s.id}">↑</button><button data-act="down" data-id="${s.id}">↓</button>
       <button data-act="edit" data-id="${s.id}">編集</button>
-      <button data-act="move" data-id="${s.id}">位置を直す</button>
+      <button data-act="move" data-id="${s.id}">位置を直す（拡大）</button>
       <button data-act="pri" data-id="${s.id}">${s.priority ? '先に回るを外す' : '先に回る'}</button>
       <button data-act="done" data-id="${s.id}">${s.status === 'done' ? '未配達に戻す' : '完了にする'}</button>
       <button data-act="navhere" data-id="${s.id}">ここからナビ</button>
@@ -431,7 +445,7 @@ async function stopAction(act, id) {
   if (act === 'done') s.status = s.status === 'done' ? 'todo' : 'done';
   if (act === 'del') { if (!(await ask(`「${stopLabel(s)}」を削除しますか？`, '削除', true))) return; p.stops.splice(i, 1); }
   if (act === 'edit') return editStopDialog(s);
-  if (act === 'move') { S.dragId = s.id; renderStops(); map.setView([s.lat, s.lng], 18); $('sheet').classList.add('collapsed'); return toast('番号の印を指で押さえたまま、正しい場所へ動かしてください', 5000); }
+  if (act === 'move') { map.setView([s.lat, s.lng], 18); $('sheet').classList.add('collapsed'); return toast('番号の印を指で押さえたまま、正しい場所へ動かしてください', 5000); }
   if (act === 'navhere') {
     // この地点より前の未配達を「あとで」に回さず、順番の先頭へ移動
     p.stops.splice(i, 1); const first = nextStopIndex(p); p.stops.splice(first < 0 ? p.stops.length : first, 0, s); s.status = 'todo';
@@ -508,7 +522,7 @@ function newStopDialog(o) {
 }
 function editStopDialog(s) {
   openModal(`<h2>配達先の編集</h2>${stopFormHtml(s, false)}
-    <p class="small muted">位置を直すときは、一覧の「位置を直す」を押してから地図の印を動かしてください。</p>
+    <p class="small muted">位置を直すときは、地図の番号の印を指で押さえたまま動かしてください。</p>
     <div class="modal-btns"><button id="eNo">やめる</button><button id="eOk" class="primary">保存</button></div>`, (box) => {
     bindStopForm(box);
     $('eNo').onclick = closeModal;
@@ -603,7 +617,7 @@ function renderAdd() {
     const fav = findFavorite({ address, name, lat: pos.lat, lng: pos.lng });
     map.setView([pos.lat, pos.lng], 17);
     newStopDialog(Object.assign({ address, name }, fav ? { okihai: fav.okihai, temp: fav.temp, kind: fav.kind, memo: fav.memo, lat: fav.lat, lng: fav.lng, approx: false, favId: fav.id } : pos));
-    if (pos.approx && !fav) toast('番地の位置までは分からないため、地名の中心に置きます。あとで「位置を直す」で直せます', 6000);
+    if (pos.approx && !fav) toast('番地の位置までは分からないため、地名の中心に置きます。あとで地図の印を指で動かして直せます', 6000);
   };
   const bindFavRows = () => document.querySelectorAll('#fvList [data-fav]').forEach((d) => {
     d.onclick = () => { const f = S.favorites.find((x) => x.id === d.dataset.fav); map.setView([f.lat, f.lng], 17); newStopDialog({ fromFav: true, favId: f.id, address: f.address, name: f.name, lat: f.lat, lng: f.lng, okihai: f.okihai, temp: f.temp, kind: f.kind, memo: f.memo }); };

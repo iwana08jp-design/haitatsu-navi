@@ -141,3 +141,9 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 .yen span { flex: 0 0 auto; font-weight: 700; font-size: 18px; }
 .yen input { font-size: 20px; font-weight: 700; }
 .tags span.collect { background: #fff0c2; color: #6b4b00; font-weight: 700; }
+
+#undoBar { position: absolute; left: 10px; right: 70px; top: calc(10px + var(--safe-top)); z-index: 960; background: rgba(20,20,20,.92); color: #fff; padding: 8px 8px 8px 14px; border-radius: 12px; display: flex; gap: 10px; align-items: center; }
+#undoBar span { flex: 1; font-size: 15px; }
+#undoBar button { flex: 0 0 auto; background: var(--amber); border-color: #e0a000; font-weight: 700; }
+.leaflet-marker-draggable .pin { cursor: grab; }
+.leaflet-drag-target .pin, .leaflet-dragging .leaflet-marker-draggable.leaflet-drag-target .pin { transform: rotate(-45deg) scale(1.25); }
