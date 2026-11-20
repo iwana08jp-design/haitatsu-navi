@@ -28,6 +28,7 @@ function stopTags(s) {
   return [s.kind === 'pickup' ? '<span class="pick">集荷</span>' : '',
     s.slot ? `<span class="slot">⏰ ${slotOf(s.slot).label}</span>` : '',
     s.temp === 'frozen' ? '<span class="cold">❄️ 冷凍</span>' : s.temp === 'chill' ? '<span class="cold">🧊 冷蔵</span>' : '',
+    s.collect > 0 ? `<span class="collect">💴 コレクト ${Number(s.collect).toLocaleString()}円</span>` : '',
     s.okihai === 'ok' ? '<span class="okk">置き配 可</span>' : s.okihai === 'ng' ? '<span class="ng">置き配 不可</span>' : '<span class="warn">置き配 未確認</span>'].join('');
 }
 const TIME_SLOTS = [
@@ -314,7 +315,7 @@ function newPlan(name) {
 function addStop(o, focus) {
   const p = plan() || newPlan();
   const s = { id: uid(), name: o.name || '', address: o.address || '', memo: o.memo || '', lat: o.lat, lng: o.lng,
-    approx: !!o.approx, priority: false, slot: o.slot || '', kind: o.kind || 'deliver', temp: o.temp || '', okihai: o.okihai || '', favId: o.favId || null, status: 'todo' };
+    approx: !!o.approx, priority: false, slot: o.slot || '', kind: o.kind || 'deliver', temp: o.temp || '', okihai: o.okihai || '', collect: o.collect || 0, favId: o.favId || null, status: 'todo' };
   p.stops.push(s); p.estimate = null; save(); renderPlan(); renderStops();
   toast(`${p.stops.length}件目を追加しました`);
   if (focus) map.panTo([s.lat, s.lng]);
@@ -369,6 +370,7 @@ function renderPlan() {
     <div class="row"><select id="pSel">${S.plans.map((x) => `<option value="${x.id}" ${x.id === p.id ? 'selected' : ''}>${esc(x.name)}（${x.stops.length}件）</option>`).join('')}</select></div>
     <div class="summary" style="margin-top:8px">
       <div><b>${total}</b> 件　完了 ${done}　残り ${total - done}</div>
+      ${p.stops.some((s) => s.collect > 0) ? `<div class="small">💴 コレクト 合計 ${p.stops.reduce((a, s) => a + (s.collect || 0), 0).toLocaleString()}円（受け取り済み ${p.stops.filter((s) => s.status === 'done').reduce((a, s) => a + (s.collect || 0), 0).toLocaleString()}円）</div>` : ''}
       <div class="small">${p.estimate ? `回る時間の目安 約${fmtDur(p.estimate.totalSec)}（${p.estimate.road ? '道路データで計算' : '直線距離で概算'}）` : '「順番を決める」で回る順番を自動で決めます'}</div>
     </div>
     <div class="btngrid">
@@ -476,6 +478,7 @@ function stopFormHtml(s, isNew) {
     <label>種別</label>${chips('fKind', KINDS, s.kind || 'deliver')}
     <label>時間帯</label>${chips('fSlot', TIME_SLOTS, s.slot || '')}
     <label>温度帯</label>${chips('fTemp', TEMPS, s.temp || '')}
+    <label class="collect-row">コレクト（代引き）の金額</label><div class="microw yen"><input id="fCollect" inputmode="numeric" pattern="[0-9]*" placeholder="なければ空欄" value="${s.collect ? s.collect : ''}"><span>円</span></div>
     <label>置き配 <span class="req">必須</span></label>${chips('fOki', OKIHAI, s.okihai || '')}
     <label>名前</label>${withMic(`<input id="fName" value="${esc(s.name || '')}" placeholder="例：山田様">`, 'fName')}
     <label>住所</label>${withMic(`<input id="fAddr" value="${esc(s.address || '')}">`, 'fAddr')}
@@ -487,7 +490,7 @@ function readStopForm() {
   const okihai = chipVal('fOki');
   if (!okihai) { $('fOki').classList.add('need'); $('fOki').scrollIntoView({ block: 'center' }); toast('置き配の「可」か「不可」を選んでください'); return null; }
   return { kind: chipVal('fKind') || 'deliver', slot: chipVal('fSlot'), temp: chipVal('fTemp'), okihai,
-    name: $('fName').value.trim(), address: $('fAddr').value.trim(), memo: $('fMemo').value.trim(), fav: $('fFav') ? $('fFav').checked : false };
+    collect: parseInt(($('fCollect') ? $('fCollect').value : '').normalize('NFKC').replace(/[^0-9]/g, ''), 10) || 0, name: $('fName').value.trim(), address: $('fAddr').value.trim(), memo: $('fMemo').value.trim(), fav: $('fFav') ? $('fFav').checked : false };
 }
 function newStopDialog(o) {
   openModal(`<h2>${o.fromFav ? 'よく使う住所から追加' : '配達先を追加'}</h2>${stopFormHtml(o, true)}
@@ -512,7 +515,7 @@ function editStopDialog(s) {
     $('eOk').onclick = () => {
       const f = readStopForm(); if (!f) return;
       if (s.slot !== f.slot) { const p = plan(); if (p) p.estimate = null; }
-      Object.assign(s, { kind: f.kind, slot: f.slot, temp: f.temp, okihai: f.okihai, name: f.name, address: f.address, memo: f.memo });
+      Object.assign(s, { kind: f.kind, slot: f.slot, temp: f.temp, okihai: f.okihai, collect: f.collect, name: f.name, address: f.address, memo: f.memo });
       updateFavoriteFromStop(s);
       save(); closeModal(); renderPlan(); renderStops();
     };
@@ -557,7 +560,7 @@ function favManager() {
     <div class="modal-btns"><button id="fmClose">閉じる</button></div>`, () => { $('fmClose').onclick = () => { closeModal(); if (!$('pane-add').classList.contains('hidden')) renderAdd(); }; $('fmQ').oninput = draw; draw(); });
 }
 function favEdit(f) {
-  openModal(`<h2>よく使う住所の編集</h2>${stopFormHtml(f, false).replace(/<label>時間帯<\/label>[\s\S]*?<\/div>/, '')}
+  openModal(`<h2>よく使う住所の編集</h2>${stopFormHtml(f, false).replace(/<label>時間帯<\/label>[\s\S]*?<\/div>/, '').replace(/<label class="collect-row">[\s\S]*?<\/div>/, '')}
     <div class="modal-btns"><button id="feNo">戻る</button><button id="feOk" class="primary">保存</button></div>`, (box) => {
     bindStopForm(box);
     $('feNo').onclick = favManager;
@@ -642,7 +645,7 @@ function routeSettingsDialog() {
 
 function bulkDialog() {
   openModal(`<h2>まとめて登録</h2>
-    <p class="small muted">1行に1件。「住所, 名前, メモ」の順に、カンマで区切って書けます（名前とメモはなくても大丈夫）。メモに「午前」「14-16」「冷凍」「集荷」「置き配」「置き配不可」などと書くと、その印も付きます。</p>
+    <p class="small muted">1行に1件。「住所, 名前, メモ」の順に、カンマで区切って書けます（名前とメモはなくても大丈夫）。メモに「午前」「14-16」「冷凍」「集荷」「コレクト3500」「置き配」「置き配不可」などと書くと、その印も付きます。</p>
     <textarea id="bkText" placeholder="長野市信更町氷ノ田 123, 山田様, 午前 冷凍 置き配不可&#10;長野市信更町灰原 45, 佐藤様, 置き配 玄関前"></textarea>
     <div class="progress hidden" id="bkProg"><div></div></div><div id="bkMsg" class="small"></div>
     <div class="modal-btns"><button id="bkNo">閉じる</button><button id="bkOk" class="primary">登録する</button></div>`, () => {
@@ -655,7 +658,7 @@ function bulkDialog() {
       for (let i = 0; i < lines.length; i++) {
         const parts = lines[i].split(/[,，、\t]/).map((x) => x.trim());
         const r = await geocode(parts[0]);
-        if (r) { addStop({ address: parts[0], name: parts[1] || '', memo: parts.slice(2).join(' '), slot: slotFromText(parts.slice(1).join(' ')), kind: /集荷/.test(lines[i]) ? 'pickup' : 'deliver', temp: /冷凍/.test(lines[i]) ? 'frozen' : /冷蔵/.test(lines[i]) ? 'chill' : '', okihai: /置き?配\s*(不可|NG|ダメ)/i.test(lines[i]) ? 'ng' : /置き?配/.test(lines[i]) ? 'ok' : '', lat: r.lat, lng: r.lng, approx: r.approx }); ok++; if (r.approx) approx++; }
+        if (r) { addStop({ address: parts[0], name: parts[1] || '', memo: parts.slice(2).join(' '), slot: slotFromText(parts.slice(1).join(' ')), kind: /集荷/.test(lines[i]) ? 'pickup' : 'deliver', temp: /冷凍/.test(lines[i]) ? 'frozen' : /冷蔵/.test(lines[i]) ? 'chill' : '', collect: (() => { const m = lines[i].normalize('NFKC').match(/(コレクト|代引き?)\s*([0-9,]+)/); return m ? parseInt(m[2].replace(/,/g, ''), 10) : 0; })(), okihai: /置き?配\s*(不可|NG|ダメ)/i.test(lines[i]) ? 'ng' : /置き?配/.test(lines[i]) ? 'ok' : '', lat: r.lat, lng: r.lng, approx: r.approx }); ok++; if (r.approx) approx++; }
         else fail.push(parts[0]);
         $('bkProg').firstElementChild.style.width = ((i + 1) / lines.length * 100) + '%';
         $('bkMsg').textContent = `${i + 1}/${lines.length} 件を処理`;
@@ -820,7 +823,7 @@ function updateNav() {
   // 到着
   if (toTarget < 40 || remain < 25) {
     setBanner('arrive', fmtDist(toTarget), '目的地付近です');
-    if (!nav.arrived) { nav.arrived = true; speak(`まもなく、${stopLabel(target)}です。${target.kind === 'pickup' ? '集荷です。' : ''}${target.temp === 'frozen' ? '冷凍です。' : target.temp === 'chill' ? '冷蔵です。' : ''}${target.okihai === 'ng' ? '置き配はできません。' : target.okihai === 'ok' ? '置き配できます。' : ''}${target.memo ? target.memo + '。' : ''}終わったら完了を押してください`); }
+    if (!nav.arrived) { nav.arrived = true; speak(`まもなく、${stopLabel(target)}です。${target.kind === 'pickup' ? '集荷です。' : ''}${target.temp === 'frozen' ? '冷凍です。' : target.temp === 'chill' ? '冷蔵です。' : ''}${target.collect > 0 ? 'コレクト、' + target.collect + '円です。' : ''}${target.okihai === 'ng' ? '置き配はできません。' : target.okihai === 'ok' ? '置き配できます。' : ''}${target.memo ? target.memo + '。' : ''}終わったら完了を押してください`); }
     return;
   }
   // 次の案内

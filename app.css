@@ -136,3 +136,8 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 .result.fav b { font-size: 17px; }
 .tags span { display: inline-block; font-size: 13px; padding: 1px 6px; border-radius: 6px; margin: 2px 4px 0 0; background: #eee; }
 .nv-btns button { font-size: 15px; padding: 6px 4px; }
+
+.yen { align-items: center; }
+.yen span { flex: 0 0 auto; font-weight: 700; font-size: 18px; }
+.yen input { font-size: 20px; font-weight: 700; }
+.tags span.collect { background: #fff0c2; color: #6b4b00; font-weight: 700; }
