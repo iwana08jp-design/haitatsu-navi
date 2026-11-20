@@ -5,7 +5,9 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第11版（2026年11月21日）';
+const APP_VERSION = '第12版（2026年11月21日）';
+const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
+const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
   { k: 'best', label: '最適ルート', desc: '時間指定は気にせず、全体で一番早く回れる順番' },
   { k: 'slot', label: '時間指定を優先', desc: '午前中 → 14〜16時 → 16〜18時 → 19〜21時の順に、その中で早い順番' },
@@ -361,9 +363,9 @@ function renderStops() {
   const nextIdx = S.nav ? S.nav.idx : nextStopIndex(p);
   const line = [];
   p.stops.forEach((s, i) => {
-    const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
+    const cls = s.status === 'todo' && i === nextIdx ? 'next' : (s.status === 'todo' ? '' : s.status);
     const m = L.marker([s.lat, s.lng], { draggable: !S.nav, autoPan: true, icon: L.divIcon({ className: '', html: `<div class="pin ${cls} ${s.kind === 'pickup' ? 'pickup' : ''}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}${s.temp ? `<div class="tempb">${s.temp === 'frozen' ? '❄️' : '🧊'}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
-    m.on('click', () => { if (S.nav) return; S.expanded = s.id; showTab('plan'); renderPlan(); $('sheet').classList.remove('collapsed'); const el = document.querySelector(`[data-sid="${s.id}"]`); if (el) el.scrollIntoView({ block: 'center' }); });
+    m.on('click', () => { if (S.nav) { if (s.status !== 'done' && S.nav.idx !== i) { S.nav.idx = i; if (s.status !== 'todo') s.status = 'todo'; save(); renderStops(); toast(`「${stopLabel(s)}」を次の配達先にしました`); routeToCurrent(false); } return; } S.expanded = s.id; showTab('plan'); renderPlan(); $('sheet').classList.remove('collapsed'); const el = document.querySelector(`[data-sid="${s.id}"]`); if (el) el.scrollIntoView({ block: 'center' }); });
     m.on('dragstart', () => { m._from = { lat: s.lat, lng: s.lng, approx: s.approx }; });
     m.on('dragend', () => {
       const ll = m.getLatLng(), from = m._from;
@@ -400,27 +402,31 @@ function renderPlan() {
   let p = plan();
   if (!p) { el.innerHTML = `<p>まだプランがありません。</p><button class="primary" id="pNew">新しいプランを作る</button>`; $('pNew').onclick = () => { newPlan(); renderPlan(); }; return; }
   const total = p.stops.length, done = p.stops.filter((s) => s.status === 'done').length;
+  const nAbsent = p.stops.filter((s) => s.status === 'absent').length, nRe = p.stops.filter((s) => s.status === 'redeliver').length;
+  const view = S.planView || 'todo';
   const startText = S.settings.startMode === 'home' && S.settings.home ? '出発地：' + S.settings.home.label : '出発地：現在地';
   el.innerHTML = `
     <div class="row"><select id="pSel">${S.plans.map((x) => `<option value="${x.id}" ${x.id === p.id ? 'selected' : ''}>${esc(x.name)}（${x.stops.length}件）</option>`).join('')}</select></div>
     <div class="summary" style="margin-top:8px">
-      <div><b>${total}</b> 件　完了 ${done}　残り ${total - done}</div>
+      <div><b>${total}</b> 件　完了 ${done}　残り ${total - done}${nAbsent ? `（不在 ${nAbsent}）` : ''}${nRe ? `（再配達 ${nRe}）` : ''}</div>
       ${p.stops.some((s) => s.collect > 0) ? `<div class="small">💴 コレクト 合計 ${p.stops.reduce((a, s) => a + (s.collect || 0), 0).toLocaleString()}円（受け取り済み ${p.stops.filter((s) => s.status === 'done').reduce((a, s) => a + (s.collect || 0), 0).toLocaleString()}円）</div>` : ''}
       <div class="small">${p.estimate ? `${p.estimate.mode ? '「' + ((ROUTE_MODES.find((m) => m.k === p.estimate.mode) || {}).label || '') + '」' : ''}回る時間の目安 約${fmtDur(p.estimate.totalSec)}（${p.estimate.road ? '道路データで計算' : '直線距離で概算'}）` : '「順番を決める」で回る順番を自動で決めます'}</div>
     </div>
     <div class="btngrid">
       <button class="accent" id="pOpt" ${total - done < 2 ? 'disabled' : ''}>順番を決める</button>
-      <button class="ok" id="pNav" ${total - done < 1 ? 'disabled' : ''}>ナビ開始</button>
+      <button class="ok" id="pNav" ${total - done < 1 ? 'disabled' : ''}>配達開始</button>
       <button id="pAdd">＋ 地点を追加</button>
       <button id="pBulk">まとめて登録</button>
     </div>
     <div class="row small"><span class="muted">${esc(startText)}／終わり：${S.settings.endMode === 'return' ? '出発地に戻る' : '最後の配達先'}</span><button id="pRoute" style="flex:0 0 auto">変更</button></div>
-    <div id="stopList">${p.stops.map((s, i) => stopRow(p, s, i)).join('') || '<p class="muted">配達先がまだありません。「＋ 地点を追加」から登録してください。地図を長押ししても追加できます。</p>'}</div>
+    <div class="subtabs"><button data-pv="todo" class="${view === 'todo' ? 'on' : ''}">未配達（${total - done}）</button><button data-pv="done" class="${view === 'done' ? 'on' : ''}">配達完了（${done}）</button></div>
+    <div id="stopList">${p.stops.map((s, i) => ((view === 'done') === (s.status === 'done') ? stopRow(p, s, i) : '')).join('') || (total ? `<p class="muted">${view === 'done' ? 'まだ配達完了はありません。' : '未配達はありません。お疲れさまでした。'}</p>` : '<p class="muted">配達先がまだありません。「＋ 地点を追加」から登録してください。地図を長押ししても追加できます。</p>')}</div>
     <h3>このプラン</h3>
     <div class="btngrid"><button id="pNew2">新しいプラン</button><button id="pRename">名前を変える</button><button id="pReset">完了を全部戻す</button><button id="pDel" class="danger">プランを削除</button></div>`;
   $('pSel').onchange = (e) => { S.planId = e.target.value; S.expanded = null; save(); renderPlan(); renderStops(); };
   $('pOpt').onclick = optimizePlan;
-  $('pNav').onclick = () => startNav(false);
+  $('pNav').onclick = chooseDeliveryMode;
+  el.querySelectorAll('[data-pv]').forEach((b) => { b.onclick = () => { S.planView = b.dataset.pv; S.expanded = null; renderPlan(); }; });
   $('pAdd').onclick = () => showTab('add');
   $('pBulk').onclick = bulkDialog;
   $('pRoute').onclick = routeSettingsDialog;
@@ -428,7 +434,7 @@ function renderPlan() {
   $('pRename').onclick = () => openModal(`<h2>プランの名前</h2><input id="rnName" value="${esc(p.name)}"><div class="modal-btns"><button id="rnNo">やめる</button><button id="rnOk" class="primary">決定</button></div>`, () => {
     $('rnNo').onclick = closeModal; $('rnOk').onclick = () => { p.name = $('rnName').value.trim() || p.name; save(); closeModal(); renderPlan(); };
   });
-  $('pReset').onclick = async () => { if (await ask('このプランの完了・あとでの印を全部「未配達」に戻しますか？', '戻す')) { p.stops.forEach((s) => { s.status = 'todo'; }); save(); renderPlan(); renderStops(); } };
+  $('pReset').onclick = async () => { if (await ask('このプランの配達完了・不在・再配達の印を全部「未配達」に戻しますか？', '戻す')) { p.stops.forEach((s) => { s.status = 'todo'; }); save(); renderPlan(); renderStops(); } };
   $('pDel').onclick = async () => {
     if (!(await ask(`「${p.name}」を削除しますか？元に戻せません。`, '削除する', true))) return;
     S.plans = S.plans.filter((x) => x.id !== p.id); S.planId = S.plans[0] ? S.plans[0].id : null; save(); renderPlan(); renderStops();
@@ -438,8 +444,8 @@ function renderPlan() {
 }
 function stopRow(p, s, i) {
   const nextIdx = nextStopIndex(p);
-  const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
-  const tags = [stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
+  const cls = s.status === 'todo' && i === nextIdx ? 'next' : (s.status === 'todo' ? '' : s.status);
+  const tags = [s.status !== 'todo' ? `<span class="st-${s.status}">${STATUS[s.status] || ''}${s.doneAt ? ' ' + new Date(s.doneAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''}</span>` : (s.lastResult ? `<span class="st-${s.lastResult}">前回 ${STATUS[s.lastResult]}</span>` : ''), stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : ''].join('');
   let html = `<div class="stop ${cls}" data-sid="${s.id}"><div class="num">${i + 1}</div><div class="body">
     <div class="name">${esc(stopLabel(s))}</div>${s.name && s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
     ${s.memo ? `<div class="addr">📝 ${esc(s.memo)}</div>` : ''}<div class="tags">${tags}</div></div></div>`;
@@ -450,7 +456,7 @@ function stopRow(p, s, i) {
       <button data-act="edit" data-id="${s.id}">編集</button>
       <button data-act="move" data-id="${s.id}">位置を直す</button>
       <button data-act="pri" data-id="${s.id}">${s.priority ? '先に回るを外す' : '先に回る'}</button>
-      <button data-act="done" data-id="${s.id}">${s.status === 'done' ? '未配達に戻す' : '完了にする'}</button>
+      ${s.status !== 'done' ? `<button data-act="st-done" data-id="${s.id}" class="ok">配達完了</button>` : ''}${s.status !== 'absent' ? `<button data-act="st-absent" data-id="${s.id}">不在</button>` : ''}${s.status !== 'redeliver' ? `<button data-act="st-redeliver" data-id="${s.id}">再配達</button>` : ''}${s.status !== 'todo' ? `<button data-act="st-todo" data-id="${s.id}">未配達に戻す</button>` : ''}
       <button data-act="navhere" data-id="${s.id}">ここからナビ</button>
       <button data-act="del" data-id="${s.id}" class="danger">削除</button></div>`;
   }
@@ -463,14 +469,14 @@ async function stopAction(act, id) {
   if (act === 'up' && i > 0) { p.stops.splice(i - 1, 0, p.stops.splice(i, 1)[0]); p.estimate = null; }
   if (act === 'down' && i < p.stops.length - 1) { p.stops.splice(i + 1, 0, p.stops.splice(i, 1)[0]); p.estimate = null; }
   if (act === 'pri') s.priority = !s.priority;
-  if (act === 'done') s.status = s.status === 'done' ? 'todo' : 'done';
+  if (act.startsWith('st-')) setStatus(s, act.slice(3));
   if (act === 'del') { if (!(await ask(`「${stopLabel(s)}」を削除しますか？`, '削除', true))) return; p.stops.splice(i, 1); }
   if (act === 'edit') return editStopDialog(s);
   if (act === 'move') return placeMode(s, false);
   if (act === 'navhere') {
     // この地点より前の未配達を「あとで」に回さず、順番の先頭へ移動
     p.stops.splice(i, 1); const first = nextStopIndex(p); p.stops.splice(first < 0 ? p.stops.length : first, 0, s); s.status = 'todo';
-    save(); renderPlan(); renderStops(); return startNav(false);
+    save(); renderPlan(); renderStops(); return startNav(false, S.settings.deliveryMode === 'nonav');
   }
   save(); renderPlan(); renderStops();
 }
@@ -931,14 +937,30 @@ const ARROWS = {
 };
 const TURN_WORD = { right: '右折', left: '左折', slight_right: '斜め右', slight_left: '斜め左', uturn: 'Uターン', arrive: '目的地' };
 
-async function startNav(sim) {
+function setStatus(s, st) {
+  if (st === 'todo') { if (s.status === 'absent' || s.status === 'redeliver') s.lastResult = s.status; s.status = 'todo'; s.doneAt = null; }
+  else { s.status = st; s.doneAt = Date.now(); (s.log = s.log || []).push({ st, at: s.doneAt }); }
+  save();
+}
+function chooseDeliveryMode() {
+  const cur = S.settings.deliveryMode || 'nonav';
+  openModal(`<h2>配達のしかた</h2>
+    <button class="mode-btn ${cur === 'nonav' ? 'on' : ''}" data-dm="nonav"><b>📋 ナビなしで配達</b><span>地図と配達先だけを表示。道案内や音声はなし。地図の印を押すと、その配達先に切り替わります</span></button>
+    <button class="mode-btn ${cur === 'nav' ? 'on' : ''}" data-dm="nav"><b>🚗 ナビありで配達</b><span>道案内の矢印と音声で、次の配達先まで案内します</span></button>
+    <div class="modal-btns"><button id="dmNo">やめる</button></div>`, (box) => {
+    $('dmNo').onclick = closeModal;
+    box.querySelectorAll('[data-dm]').forEach((b) => { b.onclick = () => { S.settings.deliveryMode = b.dataset.dm; save(); closeModal(); startNav(false, b.dataset.dm === 'nonav'); }; });
+  });
+}
+async function startNav(sim, nonav) {
   const p = plan(); if (!p) return;
   const idx = nextStopIndex(p);
-  if (idx < 0) { const sk = p.stops.findIndex((s) => s.status === 'skip'); if (sk < 0) return toast('未配達の地点がありません'); p.stops[sk].status = 'todo'; }
-  speak('ナビを開始します', true); // iPhone はボタン操作の直後に一度話させる必要がある
-  S.nav = { idx: nextStopIndex(p), route: null, ann: new Set(), hzAnn: new Set(), off: 0, lastReroute: 0, follow: true, sim: !!sim, arrived: false };
+  if (idx < 0) { const rest = p.stops.filter((s) => s.status !== 'done' && s.status !== 'todo'); if (!rest.length) return toast('未配達の地点がありません'); rest.forEach((s) => setStatus(s, 'todo')); }
+  if (!nonav) speak('ナビを開始します', true); // iPhone はボタン操作の直後に一度話させる必要がある
+  S.nav = { idx: nextStopIndex(p), route: null, ann: new Set(), hzAnn: new Set(), off: 0, lastReroute: 0, follow: !nonav, sim: !!sim, arrived: false, nonav: !!nonav };
   $('sheet').classList.add('hidden'); $('hud').classList.add('hidden');
-  $('navBanner').classList.remove('hidden'); $('navBar').classList.remove('hidden');
+  $('navBanner').classList.toggle('hidden', !!nonav); $('navBar').classList.remove('hidden');
+  $('navBar').classList.toggle('nonav', !!nonav);
   $('nvVoice').textContent = S.settings.speech ? '🔊' : '🔇';
   keepAwake();
   if (!sim) startGeo();
@@ -960,6 +982,13 @@ async function routeToCurrent(first) {
   const target = p.stops[nav.idx];
   if (!target) return finishAll();
   $('nvNext').textContent = `${nav.idx + 1}/${p.stops.length}　${stopLabel(target)}`;
+  if (nav.nonav) {
+    nav.route = null; drawRoute(); renderStops();
+    const me = S.pos;
+    if (me) map.fitBounds(L.latLngBounds([[me.lat, me.lng], [target.lat, target.lng]]), { padding: [60, 60], maxZoom: 17 });
+    else map.setView([target.lat, target.lng], Math.max(map.getZoom(), 16));
+    updateNav(); return;
+  }
   $('nbText').textContent = 'ルートを計算中…'; $('nbDist').textContent = '--';
   let from = nav.sim ? (nav.simPos || S.pos || null) : await getPos(first ? 15000 : 5000);
   if (!from && nav.sim) from = S.settings.home || { lat: target.lat + 0.01, lng: target.lng - 0.01 };
@@ -1008,6 +1037,18 @@ function updateNav() {
   const target = p.stops[nav.idx]; if (!target) return;
   const pos = nav.sim ? nav.simPos : S.pos;
   const r = nav.route;
+  if (nav.nonav) {
+    $('nvDone').textContent = target.kind === 'pickup' ? '集荷完了' : '配達完了';
+    $('nvTags').innerHTML = stopTags(target) + (target.memo ? `<div class="nvmemo">📝 ${esc(target.memo)}</div>` : '');
+    $('nvSub').textContent = pos ? `ここから直線で ${fmtDist(GC.hav(pos.lat, pos.lng, target.lat, target.lng))}　${esc(target.address || '')}` : (target.address || '');
+    if (pos) S.hazards.forEach((h) => {
+      if (!nav.hzAnn.has(h.id) && GC.hav(pos.lat, pos.lng, h.lat, h.lng) < 150) {
+        nav.hzAnn.add(h.id); const t = HAZARD_TYPES[h.type] || HAZARD_TYPES.other;
+        toast(`${t.icon} 近くに ${t.name}${h.memo ? '：' + h.memo : ''}`, 5000); speak(`近くに、${t.name}があります`);
+      }
+    });
+    return;
+  }
   if (!pos || !r) return;
   if (nav.follow) map.setView([pos.lat, pos.lng], Math.max(map.getZoom(), 16), { animate: true });
   const pr = projectOnRoute(r, pos.lat, pos.lng, r.straight ? 0 : Math.max(0, (nav.lastIdx || 0) - 20));
@@ -1023,7 +1064,7 @@ function updateNav() {
   const remain = Math.max(0, r.distance - along);
   const eta = r.distance > 0 ? r.duration * remain / r.distance : 0;
   $('nvSub').textContent = `残り ${fmtDist(remain)}・約${fmtDur(eta)}`;
-  $('nvDone').textContent = target.kind === 'pickup' ? '集荷完了 → 次へ' : '配達完了 → 次へ';
+  $('nvDone').textContent = target.kind === 'pickup' ? '集荷完了' : '配達完了';
   $('nvTags').innerHTML = stopTags(target) + (target.memo ? `<div class="nvmemo">📝 ${esc(target.memo)}</div>` : '');
   // 到着
   if (toTarget < 40 || remain < 25) {
@@ -1063,23 +1104,28 @@ function setBanner(type, dist, text) {
 async function navDone(status) {
   const nav = S.nav, p = plan(); if (!nav) return;
   const s = p.stops[nav.idx];
-  if (s) { s.status = status; s.doneAt = Date.now(); }
-  save();
+  if (s) setStatus(s, status);
+  if (status !== 'done') toast(`「${stopLabel(s)}」を${STATUS[status]}にしました`);
   const next = nextStopIndex(p);
   if (next < 0) return finishAll();
   nav.idx = next; nav.follow = true; $('btnFollow').classList.add('hidden');
   renderStops();
-  speak(`次は、${stopLabel(p.stops[next])}です${p.stops[next].kind === 'pickup' ? '。集荷です' : ''}`);
+  if (!nav.nonav) speak(`次は、${stopLabel(p.stops[next])}です${p.stops[next].kind === 'pickup' ? '。集荷です' : ''}`);
   if (nav.sim && nav.route) nav.simPos = nav.simPos || null;
   await routeToCurrent(false);
 }
 function finishAll() {
   const p = plan();
-  const skipped = p ? p.stops.filter((s) => s.status === 'skip').length : 0;
-  if (skipped) {
-    speak(`残りは、あとでにした${skipped}件です`);
-    p.stops.forEach((s) => { if (s.status === 'skip') s.status = 'todo'; });
-    save(); S.nav.idx = nextStopIndex(p); renderStops(); routeToCurrent(false); return;
+  const rest = p ? p.stops.filter((s) => s.status === 'absent' || s.status === 'redeliver' || s.status === 'skip') : [];
+  if (rest.length) {
+    const a = rest.filter((s) => s.status === 'absent').length, r = rest.filter((s) => s.status === 'redeliver').length;
+    if (!S.nav.nonav) speak(`未配達が${rest.length}件残っています`);
+    openModal(`<h2>未配達が ${rest.length} 件残っています</h2><p>${a ? `不在 ${a} 件　` : ''}${r ? `再配達 ${r} 件` : ''}</p>
+      <div class="modal-btns"><button id="faEnd">終了する</button><button id="faAgain" class="primary">もう一度回る</button></div>`, () => {
+      $('faEnd').onclick = () => { closeModal(); endNav(); };
+      $('faAgain').onclick = () => { closeModal(); rest.forEach((s) => setStatus(s, 'todo')); S.nav.idx = nextStopIndex(p); renderStops(); routeToCurrent(false); };
+    });
+    return;
   }
   speak('すべての配達が完了しました。お疲れさまでした', true);
   toast('すべての配達が完了しました。お疲れさまでした', 5000);
@@ -1341,9 +1387,10 @@ async function boot() {
   $('btnLayers').onclick = layersDialog;
   $('btnDraw').onclick = startDraw;
   $('pickCancel').onclick = endPick;
-  $('btnFollow').onclick = () => { if (!S.nav) return; S.nav.follow = true; $('btnFollow').classList.add('hidden'); updateNav(); };
+  $('btnFollow').onclick = () => { if (!S.nav) return; if (S.nav.nonav) { if (S.pos) map.setView([S.pos.lat, S.pos.lng], Math.max(map.getZoom(), 16)); $('btnFollow').classList.add('hidden'); return; } S.nav.follow = true; $('btnFollow').classList.add('hidden'); updateNav(); };
   $('nvDone').onclick = () => navDone('done');
-  $('nvSkip').onclick = () => navDone('skip');
+  $('nvAbsent').onclick = () => navDone('absent');
+  $('nvRedeliver').onclick = () => navDone('redeliver');
   $('nvFix').onclick = navFixPosition;
   $('nvEnd').onclick = async () => { if (await ask('ナビを終了しますか？', '終了する')) endNav(); };
   $('nvVoice').onclick = () => { S.settings.speech = !S.settings.speech; save(); $('nvVoice').textContent = S.settings.speech ? '🔊' : '🔇'; if (S.settings.speech) speak('音声案内をオンにしました'); };

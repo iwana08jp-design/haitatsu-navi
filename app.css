@@ -85,7 +85,7 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 #navBar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 700; background: var(--bg); border-radius: 16px 16px 0 0; box-shadow: 0 -3px 12px rgba(0,0,0,.3); padding: 10px 10px calc(10px + var(--safe-bottom)); }
 .nv-next { font-weight: 700; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nv-sub { color: var(--muted); font-size: 15px; margin-bottom: 8px; }
-.nv-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.nv-btns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .nv-btns .big { grid-column: 1 / -1; min-height: 58px; font-size: 20px; }
 
 #modal { position: absolute; inset: 0; z-index: 900; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
@@ -180,3 +180,20 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 .mode-btn.on { border: 3px solid var(--amber); background: #fff8e1; }
 #toast { pointer-events: none; }
 .sheet-handle { height: 28px; flex: 0 0 28px; }
+
+.nv-btns .mid { grid-column: span 2; min-height: 52px; font-size: 18px; font-weight: 700; }
+.nv-btns .absent { background: #fff4d6; border-color: #e0a000; }
+.nv-btns .redeliver { background: #fde2ef; border-color: #c2417a; }
+#navBar.nonav { padding-top: 12px; }
+.subtabs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 12px 0 4px; border: 2px solid var(--navy); border-radius: 10px; overflow: hidden; }
+.subtabs button { border: none; border-radius: 0; background: #fff; font-weight: 700; min-height: 44px; }
+.subtabs button.on { background: var(--navy); color: #fff; }
+.tags span.st-done { background: #d6f5df; font-weight: 700; }
+.tags span.st-absent { background: #ffe7a8; font-weight: 700; }
+.tags span.st-redeliver { background: #fbd0e3; font-weight: 700; }
+.tags span.st-skip { background: #eee; }
+.stop.absent .num { background: #e0a000; color: #000; }
+.stop.redeliver .num { background: #c2417a; }
+.pin.absent { background: #e0a000; }
+.pin.absent span { color: #000; }
+.pin.redeliver { background: #c2417a; }
