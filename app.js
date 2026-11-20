@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第7版（2026年11月21日）';
+const APP_VERSION = '第8版（2026年11月21日）';
 
 /* ---------- 地図の種類（ゼンリン契約後にここへ追加） ---------- */
 const MAP_SOURCES = {
@@ -984,6 +984,9 @@ async function renderSettings() {
   const el = $('pane-settings');
   el.innerHTML = `
     <div class="version">この版：<b>${APP_VERSION}</b></div>
+    <button id="stUpdate" class="accent" style="width:100%;margin-top:8px">アップデートを確認する</button>
+    <button id="stForce" style="width:100%;margin-top:6px;font-size:15px">うまく更新されないとき（読み込み直す）</button>
+    <p class="small muted" style="margin:4px 0 0">どちらも、配達先・よく使う住所・地図・道路データは消えません。</p>
     <h3>地図の種類</h3>
     <select id="stSrc">${Object.entries(MAP_SOURCES).map(([k, v]) => `<option value="${k}" ${k === st.mapSource ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}<option disabled>ゼンリン地図（契約後に追加）</option></select>
     <h3>オフライン準備</h3>
@@ -1016,6 +1019,8 @@ async function renderSettings() {
     <div class="row"><button id="stExport">控えを作る</button><button id="stImport">控えから戻す</button></div>
     <h3>この地図について</h3>
     <p class="small muted">地図：国土地理院。道路データ：© OpenStreetMap contributors（ODbL）。住所データ：Geolonia 住所データ（CC BY 4.0、国土交通省 位置参照情報をもとに作成）。地図表示：Leaflet。<br>道路データは実際の通行規制と違うことがあります。必ず実際の道路標識に従ってください。</p>`;
+  $('stUpdate').onclick = checkUpdate;
+  $('stForce').onclick = forceReload;
   $('stSrc').onchange = (e) => { st.mapSource = e.target.value; save(); setBaseLayer(); renderSettings(); };
   $('stAreaView').onclick = () => { const b = map.getBounds(); st.area = { name: '指定した範囲', s: +b.getSouth().toFixed(4), w: +b.getWest().toFixed(4), n: +b.getNorth().toFixed(4), e: +b.getEast().toFixed(4) }; save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
   $('stAreaPreset').onclick = () => { st.area = Object.assign({}, PRESET_AREAS.nagano); save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
@@ -1035,6 +1040,47 @@ async function renderSettings() {
   $('stImport').onclick = importDialog;
   DB.count('tiles', DB.prefix(st.mapSource + '/')).then((c) => { const t = $('stTiles'); if (t) t.textContent = c.toLocaleString(); });
   if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then((e) => { const u = $('stUsage'); if (u) u.innerHTML = `端末の使用量：<b>${Math.round(e.usage / 1048576)}MB</b>（使える目安 ${Math.round(e.quota / 1048576).toLocaleString()}MB）`; });
+}
+/* ---------- アップデート ---------- */
+function waitActivated(sw, ms) {
+  return new Promise((res) => {
+    if (!sw || sw.state === 'activated') return res(true);
+    const t = setTimeout(() => res(false), ms);
+    sw.addEventListener('statechange', () => { if (sw.state === 'activated') { clearTimeout(t); res(true); } if (sw.state === 'redundant') { clearTimeout(t); res(false); } });
+  });
+}
+async function checkUpdate() {
+  if (S.nav) return toast('ナビ中は更新できません');
+  if (!navigator.onLine) return toast('インターネットにつないでから押してください');
+  const btn = $('stUpdate'); if (btn) { btn.disabled = true; btn.textContent = '確認しています…'; }
+  try {
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (!reg) { location.reload(); return; }
+    await reg.update();
+    const nw = reg.installing || reg.waiting;
+    if (nw) {
+      if (btn) btn.textContent = '新しい版を取り込んでいます…';
+      await waitActivated(nw, 30000);
+      toast('新しい版に切り替えます'); setTimeout(() => location.reload(), 600);
+    } else {
+      toast('いまの版が最新です', 3500);
+      if (btn) { btn.disabled = false; btn.textContent = 'アップデートを確認する'; }
+    }
+  } catch (e) {
+    toast('確認できませんでした：' + e.message, 4000);
+    if (btn) { btn.disabled = false; btn.textContent = 'アップデートを確認する'; }
+  }
+}
+async function forceReload() {
+  if (S.nav) return toast('ナビ中は更新できません');
+  if (!navigator.onLine) return toast('インターネットにつないでから押してください');
+  if (!(await ask('アプリの画面を読み込み直します。配達先や地図のデータは消えません。', '読み込み直す'))) return;
+  try {
+    const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k)));
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (reg) await reg.unregister();
+  } catch (e) { /* なし */ }
+  location.reload();
 }
 function exportDialog() {
   const txt = JSON.stringify({ app: 'haitatsu-navi', v: 1, plans: S.plans, hazards: S.hazards, favorites: S.favorites, settings: S.settings });
