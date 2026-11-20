@@ -147,3 +147,6 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 #undoBar button { flex: 0 0 auto; background: var(--amber); border-color: #e0a000; font-weight: 700; }
 .leaflet-marker-draggable .pin { cursor: grab; }
 .leaflet-drag-target .pin, .leaflet-dragging .leaflet-marker-draggable.leaflet-drag-target .pin { transform: rotate(-45deg) scale(1.25); }
+
+.version { background: var(--navy); color: #fff; padding: 8px 12px; border-radius: 10px; font-size: 15px; }
+.version b { color: var(--amber); }

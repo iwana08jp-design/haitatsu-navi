@@ -5,6 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
+const APP_VERSION = '第7版（2026年11月21日）';
 
 /* ---------- 地図の種類（ゼンリン契約後にここへ追加） ---------- */
 const MAP_SOURCES = {
@@ -982,6 +983,7 @@ async function renderSettings() {
   let tileCount = '…', usage = '';
   const el = $('pane-settings');
   el.innerHTML = `
+    <div class="version">この版：<b>${APP_VERSION}</b></div>
     <h3>地図の種類</h3>
     <select id="stSrc">${Object.entries(MAP_SOURCES).map(([k, v]) => `<option value="${k}" ${k === st.mapSource ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}<option disabled>ゼンリン地図（契約後に追加）</option></select>
     <h3>オフライン準備</h3>
@@ -1112,7 +1114,22 @@ async function boot() {
   $('modal').onclick = (e) => { if (e.target === $('modal')) closeModal(); };
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing; if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'activated' && hadController && !S.nav) {
+            let bar = $('undoBar');
+            if (!bar) { bar = document.createElement('div'); bar.id = 'undoBar'; document.body.appendChild(bar); }
+            bar.innerHTML = '<span>新しい版を取り込みました</span><button>今すぐ切り替える</button>';
+            bar.classList.remove('hidden');
+            bar.querySelector('button').onclick = () => location.reload();
+          }
+        });
+      });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => {});
   }
   if (DEMO) window.__S = S;
 }
