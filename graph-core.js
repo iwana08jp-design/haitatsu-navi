@@ -546,7 +546,42 @@
     return tour;
   }
 
+  /* 時間帯ごとに分けて順番を決める
+   * meta[i-1] = {rank: 時間帯の早い順の番号（指定なしは -1）, priority}
+   * 指定なしの地点は、所要時間が一番近い時間帯指定の地点と同じ組に入れる（近くを通るときに配る） */
+  function solveGrouped(M, n, start, meta, end, budgetMs) {
+    function c(a, b) { return M[a * n + b]; }
+    var ids = [], i;
+    for (i = 1; i < n; i++) ids.push(i);
+    var slotted = ids.filter(function (k) { return meta[k - 1].rank >= 0; });
+    var groups = {};
+    ids.forEach(function (k) {
+      var r = meta[k - 1].rank;
+      if (r < 0) {
+        if (!slotted.length) r = 0;
+        else {
+          var best = slotted[0], bd = Infinity;
+          slotted.forEach(function (j) { var d = Math.min(c(k, j), c(j, k)); if (d < bd) { bd = d; best = j; } });
+          r = meta[best - 1].rank;
+        }
+      }
+      (groups[r] = groups[r] || []).push(k);
+    });
+    var ranks = Object.keys(groups).map(Number).sort(function (a, b) { return a - b; });
+    var calls = ranks.length * 2, each = Math.max(200, (budgetMs || 2000) / calls);
+    var order = [], cur = start;
+    ranks.forEach(function (r, gi) {
+      var g = groups[r], last = gi === ranks.length - 1;
+      var pri = g.filter(function (k) { return meta[k - 1].priority; });
+      var rest = g.filter(function (k) { return !meta[k - 1].priority; });
+      if (pri.length) { var t1 = solveTSP(M, n, cur, pri, rest.length ? -1 : (last ? end : -1), each); order = order.concat(t1); cur = t1[t1.length - 1]; }
+      if (rest.length) { var t2 = solveTSP(M, n, cur, rest, last ? end : -1, each); order = order.concat(t2); cur = t2[t2.length - 1]; }
+    });
+    return order;
+  }
+
   var api = {
+    solveGrouped: solveGrouped,
     SPEED: SPEED, CLASS_NAME: CLASS_NAME, overpassQuery: overpassQuery, splitBbox: splitBbox,
     buildGraph: buildGraph, prepare: prepare, snap: snap, dijkstra: dijkstra, route: route,
     matrix: matrix, solveTSP: solveTSP, hav: hav, bearing: bearing,

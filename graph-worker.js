@@ -82,25 +82,16 @@ function snapAll(points, maxM) {
 }
 
 /* 出発地 + 地点 → 最適な順番
- * opts: {start:{lat,lng}, stops:[{lat,lng,priority}], end:'open'|'return'} */
+ * opts: {start:{lat,lng}, stops:[{lat,lng,priority,rank}], end:'open'|'return'} */
 function optimize(id, opts) {
   var pts = [opts.start].concat(opts.stops);
   var snaps = snapAll(pts);
   var n = pts.length;
   var M = GC.matrix(G, snaps, function (d, t) { if (d % 5 === 0 || d === t) progress(id, { stage: 'matrix', done: d, total: t, msg: '所要時間を計算中… ' + d + '/' + t }); });
   progress(id, { stage: 'tsp', msg: '回る順番を考えています…' });
-  var pri = [], rest = [];
-  for (var i = 1; i < n; i++) (opts.stops[i - 1].priority ? pri : rest).push(i);
   var endIdx = opts.end === 'return' ? 0 : -1;
-  var order;
   var budget = Math.min(6000, 1500 + n * 40);
-  if (pri.length) {
-    var t1 = GC.solveTSP(M, n, 0, pri, -1, budget / 2);
-    var t2 = GC.solveTSP(M, n, t1[t1.length - 1], rest, endIdx, budget / 2);
-    order = t1.concat(t2);
-  } else {
-    order = GC.solveTSP(M, n, 0, rest, endIdx, budget);
-  }
+  var order = GC.solveGrouped(M, n, 0, opts.stops.map(function (s) { return { rank: s.rank == null ? -1 : s.rank, priority: !!s.priority }; }), endIdx, budget);
   // 区間ごとの時間
   var legs = [], prev = 0, total = 0;
   order.forEach(function (k) { var s = M[prev * n + k]; legs.push(s); total += s; prev = k; });
