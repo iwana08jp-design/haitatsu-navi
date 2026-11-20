@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第9版（2026年11月21日）';
+const APP_VERSION = '第10版（2026年11月21日）';
 
 /* ---------- 地図の種類（ゼンリン契約後にここへ追加） ---------- */
 const MAP_SOURCES = {
@@ -50,7 +50,7 @@ const HAZARD_TYPES = { ice: { icon: '❄️', name: '凍結注意' }, chain: { i
 const S = {
   settings: { v: 2, mapSource: 'gsi_std', area: Object.assign({}, PRESET_AREAS.shinko), maxZoom: 17, speech: true, voiceInput: true, lastTown: '',
     startMode: 'gps', home: null, endMode: 'open', autoCache: true },
-  plans: [], planId: null, hazards: [], favorites: [],
+  plans: [], planId: null, hazards: [], favorites: [], drawings: [],
   graphMeta: null, pos: null, nav: null, expanded: null, pick: null
 };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -60,7 +60,7 @@ let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards, favorites: S.favorites }).catch((e) => toast('保存できませんでした：' + e.message));
+    DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards, favorites: S.favorites, drawings: S.drawings }).catch((e) => toast('保存できませんでした：' + e.message));
   }, 300);
 }
 
@@ -216,6 +216,7 @@ function initMap() {
   setBaseLayer();
   stopLayer = L.layerGroup().addTo(map);
   hazardLayer = L.layerGroup().addTo(map);
+  setupDrawing();
   map.on('click', onMapClick);
   map.on('contextmenu', (e) => mapMenu(e.latlng));
   map.on('dragstart', () => { if (S.nav) { S.nav.follow = false; $('btnFollow').classList.remove('hidden'); } });
@@ -582,6 +583,128 @@ function favEdit(f) {
     $('feNo').onclick = favManager;
     $('feOk').onclick = () => { const v = readStopForm(); if (!v) return; Object.assign(f, { kind: v.kind, temp: v.temp, okihai: v.okihai, name: v.name, address: v.address, memo: v.memo }); save(); toast('保存しました'); favManager(); };
   });
+}
+
+/* ---------- 地図への手書き（Apple Pencil） ---------- */
+const DRAW_COLORS = [{ k: '#d62828', label: '赤' }, { k: '#1d4ed8', label: '青' }, { k: '#111111', label: '黒' }, { k: '#15803d', label: '緑' }, { k: '#f59e0b', label: '黄' }];
+let drawLayer = null;
+const DR = { on: false, color: '#d62828', width: 4, eraser: false, finger: false, cur: null, curLine: null, undo: [], pid: null };
+function renderDrawings() {
+  if (!drawLayer) return;
+  drawLayer.clearLayers();
+  if (S.settings.showDrawings === false && !DR.on) return;
+  S.drawings.forEach((d) => { L.polyline(d.pts, { color: d.color, weight: d.width, opacity: .9, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(drawLayer); });
+}
+function drawToolbar() {
+  let tb = $('drawUI');
+  if (!tb) { tb = document.createElement('div'); tb.id = 'drawUI'; document.body.appendChild(tb); }
+  tb.innerHTML = `<div class="dr-top">✏️ 手書きモード：ペンで書けます。${DR.finger ? '指でも書けます（地図を動かすときは「指で書く」を切る）' : '指で触ると地図が動きます。'}</div>
+    <div class="dr-bar">
+      <div class="dr-row">${DRAW_COLORS.map((c) => `<button class="dr-col ${!DR.eraser && DR.color === c.k ? 'on' : ''}" data-col="${c.k}" style="--c:${c.k}" title="${c.label}"></button>`).join('')}
+        <button class="dr-w ${DR.width === 4 ? 'on' : ''}" data-w="4">細</button><button class="dr-w ${DR.width === 8 ? 'on' : ''}" data-w="8">太</button></div>
+      <div class="dr-row">
+        <button id="drEraser" class="${DR.eraser ? 'on' : ''}">🧽 消しゴム</button>
+        <button id="drFinger" class="${DR.finger ? 'on' : ''}">☝️ 指で書く</button>
+        <button id="drUndo" ${DR.undo.length ? '' : 'disabled'}>↩ 戻す</button>
+        <button id="drClear">全部消す</button>
+        <button id="drDone" class="ok">完了</button>
+      </div>
+    </div>`;
+  tb.classList.remove('hidden');
+  tb.querySelectorAll('[data-col]').forEach((b) => { b.onclick = () => { DR.color = b.dataset.col; DR.eraser = false; drawToolbar(); }; });
+  tb.querySelectorAll('[data-w]').forEach((b) => { b.onclick = () => { DR.width = +b.dataset.w; drawToolbar(); }; });
+  $('drEraser').onclick = () => { DR.eraser = !DR.eraser; drawToolbar(); };
+  $('drFinger').onclick = () => { DR.finger = !DR.finger; drawToolbar(); };
+  $('drUndo').onclick = () => {
+    const a = DR.undo.pop(); if (!a) return;
+    if (a.type === 'add') S.drawings = S.drawings.filter((d) => d.id !== a.d.id);
+    else S.drawings.push(...a.ds);
+    save(); renderDrawings(); drawToolbar();
+  };
+  $('drClear').onclick = async () => {
+    if (!S.drawings.length) return;
+    if (!(await ask(`手書きを全部（${S.drawings.length}本）消しますか？`, '全部消す', true))) return;
+    DR.undo.push({ type: 'del', ds: S.drawings.slice() }); S.drawings = []; save(); renderDrawings(); drawToolbar();
+  };
+  $('drDone').onclick = endDraw;
+}
+function startDraw() {
+  if (S.nav) return toast('ナビ中は書き込めません');
+  DR.on = true; DR.undo = [];
+  $('sheet').classList.add('hidden'); $('hud').classList.add('hidden');
+  map.getContainer().classList.add('drawing');
+  renderDrawings(); drawToolbar();
+}
+function endDraw() {
+  DR.on = false; DR.cur = null;
+  if (DR.curLine) { map.removeLayer(DR.curLine); DR.curLine = null; }
+  map.dragging.enable();
+  $('drawUI').classList.add('hidden');
+  $('sheet').classList.remove('hidden'); $('hud').classList.remove('hidden');
+  map.getContainer().classList.remove('drawing');
+  renderDrawings();
+  if (S.drawings.length) toast('手書きを保存しました');
+}
+function drawWants(e) { return DR.on && (e.pointerType === 'pen' || e.pointerType === 'mouse' || (DR.finger && e.pointerType === 'touch')); }
+function eraseAt(pt) {
+  const hit = S.drawings.filter((d) => d.pts.some((p) => map.latLngToContainerPoint(p).distanceTo(pt) < 14));
+  if (!hit.length) return;
+  const ids = new Set(hit.map((d) => d.id));
+  S.drawings = S.drawings.filter((d) => !ids.has(d.id));
+  DR.undo.push({ type: 'del', ds: hit }); save(); renderDrawings(); drawToolbar();
+}
+function setupDrawing() {
+  drawLayer = L.layerGroup().addTo(map);
+  const el = map.getContainer();
+  const ptOf = (e) => { const r = el.getBoundingClientRect(); return L.point(e.clientX - r.left, e.clientY - r.top); };
+  el.addEventListener('pointerdown', (e) => {
+    if (!drawWants(e) || e.target.closest('.leaflet-control')) return;
+    e.preventDefault(); e.stopPropagation();
+    map.dragging.disable();
+    DR.pid = e.pointerId;
+    try { el.setPointerCapture(e.pointerId); } catch (x) { /* なし */ }
+    const pt = ptOf(e);
+    if (DR.eraser) { DR.cur = { erase: true }; eraseAt(pt); return; }
+    const ll = map.containerPointToLatLng(pt);
+    DR.cur = { pts: [[ll.lat, ll.lng]], last: pt };
+    DR.curLine = L.polyline(DR.cur.pts, { color: DR.color, weight: DR.width, opacity: .9, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(map);
+  }, true);
+  el.addEventListener('pointermove', (e) => {
+    if (!DR.cur || e.pointerId !== DR.pid) return;
+    e.preventDefault(); e.stopPropagation();
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of (evs.length ? evs : [e])) {
+      const pt = ptOf(ev);
+      if (DR.cur.erase) { eraseAt(pt); continue; }
+      if (pt.distanceTo(DR.cur.last) < 2) continue;
+      DR.cur.last = pt;
+      const ll = map.containerPointToLatLng(pt);
+      DR.cur.pts.push([ll.lat, ll.lng]); DR.curLine.addLatLng(ll);
+    }
+  }, true);
+  const finish = (e) => {
+    if (!DR.cur || e.pointerId !== DR.pid) return;
+    e.preventDefault(); e.stopPropagation();
+    if (!DR.cur.erase) {
+      let pts = DR.cur.pts;
+      if (pts.length === 1) { const p = pts[0]; pts = [p, [p[0] + 0.000002, p[1] + 0.000002]]; } // 点
+      const d = { id: uid(), color: DR.color, width: DR.width, pts: pts.map((p) => [+p[0].toFixed(7), +p[1].toFixed(7)]) };
+      S.drawings.push(d); DR.undo.push({ type: 'add', d }); save();
+      if (DR.curLine) { map.removeLayer(DR.curLine); DR.curLine = null; }
+      renderDrawings(); drawToolbar();
+    }
+    DR.cur = null; DR.pid = null;
+    if (!DR.finger) map.dragging.enable();
+  };
+  el.addEventListener('pointerup', finish, true);
+  el.addEventListener('pointercancel', finish, true);
+  // iPad で Apple Pencil のタッチが地図を動かさないようにする
+  el.addEventListener('touchstart', (e) => {
+    if (!DR.on) return;
+    const t = e.touches[0];
+    if ((t && t.touchType === 'stylus') || DR.finger) { e.stopPropagation(); }
+  }, { capture: true, passive: true });
+  renderDrawings();
 }
 
 /* ---------- 位置を合わせる（地図の真ん中の＋に合わせる） ---------- */
@@ -1122,7 +1245,7 @@ async function forceReload() {
   location.reload();
 }
 function exportDialog() {
-  const txt = JSON.stringify({ app: 'haitatsu-navi', v: 1, plans: S.plans, hazards: S.hazards, favorites: S.favorites, settings: S.settings });
+  const txt = JSON.stringify({ app: 'haitatsu-navi', v: 1, plans: S.plans, hazards: S.hazards, favorites: S.favorites, drawings: S.drawings, settings: S.settings });
   openModal(`<h2>データの控え</h2><p class="small muted">下の文字をコピーして、メモアプリなどに貼り付けて保存してください。</p><textarea id="exTxt" readonly>${esc(txt)}</textarea>
     <div class="modal-btns"><button id="exNo">閉じる</button><button id="exCopy" class="primary">コピー</button></div>`, () => {
     $('exNo').onclick = closeModal;
@@ -1137,7 +1260,7 @@ function importDialog() {
       try {
         const d = JSON.parse($('imTxt').value);
         if (d.app !== 'haitatsu-navi') throw new Error('形式が違います');
-        S.plans = d.plans || []; S.hazards = d.hazards || []; S.favorites = d.favorites || []; if (d.settings) Object.assign(S.settings, d.settings);
+        S.plans = d.plans || []; S.hazards = d.hazards || []; S.favorites = d.favorites || []; S.drawings = d.drawings || []; if (d.settings) Object.assign(S.settings, d.settings);
         S.planId = S.plans[0] ? S.plans[0].id : null; save(); closeModal(); renderAll(); toast('戻しました');
       } catch (e) { toast('戻せませんでした：' + e.message); }
     };
@@ -1153,13 +1276,15 @@ function showTab(name) {
   if (name === 'add') { renderAdd(); }
   if (name === 'settings') renderSettings();
 }
-function renderAll() { renderPlan(); renderStops(); renderHazards(); setBaseLayer(); }
+function renderAll() { renderPlan(); renderStops(); renderHazards(); renderDrawings(); setBaseLayer(); }
 
 function layersDialog() {
   openModal(`<h2>地図の種類</h2>${Object.entries(MAP_SOURCES).map(([k, v]) => `<button data-src="${k}" class="${k === S.settings.mapSource ? 'primary' : ''}" style="width:100%;margin:4px 0">${esc(v.name)}</button>`).join('')}
-    <button disabled style="width:100%;margin:4px 0">ゼンリン地図（契約後に追加）</button><p class="small muted">オフラインで使えるのは、ダウンロードした種類の地図です。</p>
+    <button disabled style="width:100%;margin:4px 0">ゼンリン地図（契約後に追加）</button>
+    <button id="lyDraw" style="width:100%;margin:8px 0 4px">${S.settings.showDrawings === false ? '✏️ 手書きを表示する' : '✏️ 手書きを隠す'}</button><p class="small muted">オフラインで使えるのは、ダウンロードした種類の地図です。</p>
     <div class="modal-btns"><button id="lyNo">閉じる</button></div>`, (box) => {
     $('lyNo').onclick = closeModal;
+    $('lyDraw').onclick = () => { S.settings.showDrawings = S.settings.showDrawings === false; save(); renderDrawings(); closeModal(); };
     box.querySelectorAll('[data-src]').forEach((b) => { b.onclick = () => { S.settings.mapSource = b.dataset.src; save(); setBaseLayer(); closeModal(); }; });
   });
 }
@@ -1170,13 +1295,13 @@ async function boot() {
   updateNet();
   try {
     const st = await DB.get('kv', 'state');
-    if (st) { Object.assign(S.settings, st.settings || {}); S.plans = st.plans || []; S.planId = st.planId; S.hazards = st.hazards || []; S.favorites = st.favorites || [];
+    if (st) { Object.assign(S.settings, st.settings || {}); S.plans = st.plans || []; S.planId = st.planId; S.hazards = st.hazards || []; S.favorites = st.favorites || []; S.drawings = st.drawings || [];
       if (!st.settings || !st.settings.v) { S.settings.v = 2; S.settings.area = Object.assign({}, PRESET_AREAS.shinko); S.settings.maxZoom = 17; if (S.settings.voiceInput === undefined) S.settings.voiceInput = true; } }
   } catch (e) { toast('この端末ではデータを保存できないようです'); }
   if (!plan() && S.plans[0]) S.planId = S.plans[0].id;
   setBaseLayer();
   await loadAddr();
-  renderPlan(); renderStops(); renderHazards();
+  renderPlan(); renderStops(); renderHazards(); renderDrawings();
   const p = plan();
   if (p && p.stops.length) map.fitBounds(L.latLngBounds(p.stops.map((s) => [s.lat, s.lng])), { padding: [30, 30], maxZoom: 16 });
   call('load').then((m) => { S.graphMeta = m; if (!$('pane-settings').classList.contains('hidden')) renderSettings(); }).catch(() => {});
@@ -1185,6 +1310,7 @@ async function boot() {
   $('sheetHandle').onclick = () => $('sheet').classList.toggle('collapsed');
   $('btnLocate').onclick = () => { S.locateOnce = true; startGeo(); if (S.pos) onPosition(S.pos); };
   $('btnLayers').onclick = layersDialog;
+  $('btnDraw').onclick = startDraw;
   $('pickCancel').onclick = endPick;
   $('btnFollow').onclick = () => { if (!S.nav) return; S.nav.follow = true; $('btnFollow').classList.add('hidden'); updateNav(); };
   $('nvDone').onclick = () => navDone('done');

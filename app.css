@@ -156,3 +156,14 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 #placeUI .pl-cross { position: absolute; left: 50%; top: 50%; width: 80px; height: 80px; transform: translate(-50%, -50%); }
 #placeUI .pl-btns { position: absolute; left: 10px; right: 10px; bottom: calc(14px + var(--safe-bottom)); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; pointer-events: auto; }
 #placeUI .pl-btns button { min-height: 54px; font-size: 17px; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+
+.leaflet-container.drawing { cursor: crosshair; }
+#drawUI { position: absolute; inset: 0; z-index: 800; pointer-events: none; }
+#drawUI .dr-top { position: absolute; left: 10px; right: 10px; top: calc(10px + var(--safe-top)); background: rgba(20,33,61,.92); color: #fff; padding: 8px 12px; border-radius: 12px; font-size: 15px; pointer-events: auto; }
+#drawUI .dr-bar { position: absolute; left: 8px; right: 8px; bottom: calc(10px + var(--safe-bottom)); background: var(--bg); border-radius: 14px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.35); pointer-events: auto; display: flex; flex-direction: column; gap: 8px; }
+#drawUI .dr-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+#drawUI .dr-row > button { flex: 1 1 auto; min-height: 46px; font-size: 15px; padding: 6px 8px; }
+#drawUI .dr-col { flex: 0 0 46px !important; width: 46px; height: 46px; border-radius: 50%; background: var(--c); border: 3px solid #fff; box-shadow: 0 0 0 1px #aaa; padding: 0; }
+#drawUI .dr-col.on { box-shadow: 0 0 0 3px var(--amber); }
+#drawUI button.on { background: var(--amber); border-color: #e0a000; font-weight: 700; }
+#drawUI .dr-col.on { background: var(--c) !important; border-color: #fff !important; }
