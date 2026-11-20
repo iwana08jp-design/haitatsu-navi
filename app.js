@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第8版（2026年11月21日）';
+const APP_VERSION = '第9版（2026年11月21日）';
 
 /* ---------- 地図の種類（ゼンリン契約後にここへ追加） ---------- */
 const MAP_SOURCES = {
@@ -268,7 +268,7 @@ async function onlineSearch(q) {
   try {
     const r = await fetchTimeout('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q), 7000);
     const js = await r.json();
-    return js.slice(0, 8).map((f) => ({ label: f.properties.title, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], approx: false, src: 'on' }));
+    return js.slice(0, 8).map((f) => ({ label: f.properties.title, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], approx: !/[0-9０-９]/.test(f.properties.title), src: 'on' }));
   } catch (e) { return []; }
 }
 function nearLabel(lat, lng) {
@@ -419,7 +419,7 @@ function renderPlan() {
 function stopRow(p, s, i) {
   const nextIdx = nextStopIndex(p);
   const cls = s.status === 'done' ? 'done' : s.status === 'skip' ? 'skip' : i === nextIdx ? 'next' : '';
-  const tags = [stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（地図の印を指で動かして修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
+  const tags = [stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : '', s.status === 'skip' ? '<span>あとで</span>' : ''].join('');
   let html = `<div class="stop ${cls}" data-sid="${s.id}"><div class="num">${i + 1}</div><div class="body">
     <div class="name">${esc(stopLabel(s))}</div>${s.name && s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
     ${s.memo ? `<div class="addr">📝 ${esc(s.memo)}</div>` : ''}<div class="tags">${tags}</div></div></div>`;
@@ -428,7 +428,7 @@ function stopRow(p, s, i) {
       <button data-act="show" data-id="${s.id}">地図で見る</button>
       <button data-act="up" data-id="${s.id}">↑</button><button data-act="down" data-id="${s.id}">↓</button>
       <button data-act="edit" data-id="${s.id}">編集</button>
-      <button data-act="move" data-id="${s.id}">位置を直す（拡大）</button>
+      <button data-act="move" data-id="${s.id}">位置を直す</button>
       <button data-act="pri" data-id="${s.id}">${s.priority ? '先に回るを外す' : '先に回る'}</button>
       <button data-act="done" data-id="${s.id}">${s.status === 'done' ? '未配達に戻す' : '完了にする'}</button>
       <button data-act="navhere" data-id="${s.id}">ここからナビ</button>
@@ -446,7 +446,7 @@ async function stopAction(act, id) {
   if (act === 'done') s.status = s.status === 'done' ? 'todo' : 'done';
   if (act === 'del') { if (!(await ask(`「${stopLabel(s)}」を削除しますか？`, '削除', true))) return; p.stops.splice(i, 1); }
   if (act === 'edit') return editStopDialog(s);
-  if (act === 'move') { map.setView([s.lat, s.lng], 18); $('sheet').classList.add('collapsed'); return toast('番号の印を指で押さえたまま、正しい場所へ動かしてください', 5000); }
+  if (act === 'move') return placeMode(s, false);
   if (act === 'navhere') {
     // この地点より前の未配達を「あとで」に回さず、順番の先頭へ移動
     p.stops.splice(i, 1); const first = nextStopIndex(p); p.stops.splice(first < 0 ? p.stops.length : first, 0, s); s.status = 'todo';
@@ -515,9 +515,10 @@ function newStopDialog(o) {
     $('nsOk').onclick = () => {
       const f = readStopForm(); if (!f) return;
       const data = Object.assign({}, o, f);
-      addStop(data, true);
-      if (f.fav) saveFavorite(data);
+      const st = addStop(data, true);
+      if (f.fav) { saveFavorite(data); const fv = findFavorite(data); if (fv) st.favId = fv.id; }
       closeModal();
+      if (st.approx) placeMode(st, true);
     };
   });
 }
@@ -583,6 +584,44 @@ function favEdit(f) {
   });
 }
 
+/* ---------- 位置を合わせる（地図の真ん中の＋に合わせる） ---------- */
+function placeMode(s, isNew) {
+  if (S.nav) return;
+  const prevSrc = S.settings.mapSource;
+  const from = { lat: s.lat, lng: s.lng, approx: s.approx };
+  $('sheet').classList.add('hidden'); $('hud').classList.add('hidden');
+  setTimeout(() => $('toast').classList.add('hidden'), 50);
+  map.setView([s.lat, s.lng], Math.max(map.getZoom(), 18));
+  let ov = $('placeUI');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'placeUI'; document.body.appendChild(ov); }
+  ov.innerHTML = `<div class="pl-top"><b>${esc(stopLabel(s))}</b><br>${isNew ? '番地の位置までは分からないため、地名の中心に置きました。' : ''}地図を指で動かして、<b>真ん中の＋</b>を家に合わせてください。</div>
+    <svg class="pl-cross" viewBox="0 0 80 80"><path d="M40 4V32M40 48V76M4 40H32M48 40H76" stroke="#fff" stroke-width="9" stroke-linecap="round"/><path d="M40 4V32M40 48V76M4 40H32M48 40H76" stroke="#c8442f" stroke-width="4" stroke-linecap="round"/><circle cx="40" cy="40" r="4" fill="#c8442f" stroke="#fff" stroke-width="2"/></svg>
+    <div class="pl-btns"><button id="plPhoto">${S.settings.mapSource === 'gsi_photo' ? '🗺 地図に戻す' : '📷 航空写真'}</button><button id="plHere">📍 今いる場所</button><button id="plNo">やめる</button><button id="plOk" class="ok">ここに決定</button></div>`;
+  ov.classList.remove('hidden');
+  $('btnFollow').classList.add('hidden');
+  const close = () => { ov.classList.add('hidden'); $('sheet').classList.remove('hidden'); $('hud').classList.remove('hidden'); if (S.settings.mapSource !== prevSrc) { S.settings.mapSource = prevSrc; save(); setBaseLayer(); } };
+  $('plPhoto').onclick = () => { S.settings.mapSource = S.settings.mapSource === 'gsi_photo' ? prevSrc : 'gsi_photo'; setBaseLayer(); $('plPhoto').textContent = S.settings.mapSource === 'gsi_photo' ? '🗺 地図に戻す' : '📷 航空写真'; };
+  $('plHere').onclick = async () => { const p = await getPos(8000); if (!p) return toast('現在地が分かりません'); map.setView([p.lat, p.lng], 19); };
+  $('plNo').onclick = close;
+  $('plOk').onclick = () => {
+    const c = map.getCenter();
+    s.lat = c.lat; s.lng = c.lng; s.approx = false;
+    const p = plan(); if (p) p.estimate = null;
+    updateFavoriteFromStop(s); save(); close(); renderPlan(); renderStops();
+    undoToast(`「${stopLabel(s)}」の位置を決めました`, () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderPlan(); renderStops(); });
+  };
+}
+async function navFixPosition() {
+  const nav = S.nav, p = plan(); if (!nav) return;
+  const s = p.stops[nav.idx]; if (!s) return;
+  const pos = nav.sim ? nav.simPos : S.pos;
+  if (!pos) return toast('現在地が分かりません');
+  if (!(await ask(`今いる場所を「${stopLabel(s)}」の正しい位置として登録しますか？（よく使う住所にも反映します）`, '登録する'))) return;
+  const from = { lat: s.lat, lng: s.lng, approx: s.approx };
+  s.lat = pos.lat; s.lng = pos.lng; s.approx = false; updateFavoriteFromStop(s); save(); renderStops();
+  undoToast('今いる場所を正しい位置として登録しました', () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderStops(); });
+}
+
 /* ---------- 地点を追加 ---------- */
 function renderAdd() {
   const towns = ADDR.filter((a) => a.city === HOME_AREA.city && a.group === HOME_AREA.town);
@@ -618,7 +657,7 @@ function renderAdd() {
     const fav = findFavorite({ address, name, lat: pos.lat, lng: pos.lng });
     map.setView([pos.lat, pos.lng], 17);
     newStopDialog(Object.assign({ address, name }, fav ? { okihai: fav.okihai, temp: fav.temp, kind: fav.kind, memo: fav.memo, lat: fav.lat, lng: fav.lng, approx: false, favId: fav.id } : pos));
-    if (pos.approx && !fav) toast('番地の位置までは分からないため、地名の中心に置きます。あとで地図の印を指で動かして直せます', 6000);
+
   };
   const bindFavRows = () => document.querySelectorAll('#fvList [data-fav]').forEach((d) => {
     d.onclick = () => { const f = S.favorites.find((x) => x.id === d.dataset.fav); map.setView([f.lat, f.lng], 17); newStopDialog({ fromFav: true, favId: f.id, address: f.address, name: f.name, lat: f.lat, lng: f.lng, okihai: f.okihai, temp: f.temp, kind: f.kind, memo: f.memo }); };
@@ -1150,6 +1189,7 @@ async function boot() {
   $('btnFollow').onclick = () => { if (!S.nav) return; S.nav.follow = true; $('btnFollow').classList.add('hidden'); updateNav(); };
   $('nvDone').onclick = () => navDone('done');
   $('nvSkip').onclick = () => navDone('skip');
+  $('nvFix').onclick = navFixPosition;
   $('nvEnd').onclick = async () => { if (await ask('ナビを終了しますか？', '終了する')) endNav(); };
   $('nvVoice').onclick = () => { S.settings.speech = !S.settings.speech; save(); $('nvVoice').textContent = S.settings.speech ? '🔊' : '🔇'; if (S.settings.speech) speak('音声案内をオンにしました'); };
   $('nvExt').onclick = () => {
