@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第12版（2026年11月21日）';
+const APP_VERSION = '第13版（2026年11月23日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -243,8 +243,10 @@ function initMap() {
   map.on('dragstart', () => { if (S.nav) { S.nav.follow = false; $('btnFollow').classList.remove('hidden'); } });
 }
 function onMapClick(e) {
-  if (!S.pick) return;
-  const cb = S.pick.cb; endPick(); cb(e.latlng);
+  if (S.pick) { const cb = S.pick.cb; endPick(); cb(e.latlng); return; }
+  if (DR.on || ($('placeUI') && !$('placeUI').classList.contains('hidden'))) return;
+  if (!$('modal').classList.contains('hidden') && !$('modal').classList.contains('mini')) return;
+  mapMenu(e.latlng);
 }
 function startPick(text, cb) {
   S.pick = { cb }; $('pickText').textContent = text; $('pickBar').classList.remove('hidden');
@@ -252,14 +254,14 @@ function startPick(text, cb) {
 }
 function endPick() { S.pick = null; $('pickBar').classList.add('hidden'); }
 function mapMenu(ll) {
-  if (S.nav) return;
+  if (DR.on) return;
   const div = document.createElement('div');
   div.innerHTML = `<div class="small muted">${esc(nearLabel(ll.lat, ll.lng))}</div>
-    <button class="primary" data-a="stop">配達先に追加</button><button data-a="hz">注意地点に追加</button><button data-a="home">ここを出発地にする</button>`;
+    <button class="primary" data-a="stop">配達先に追加</button><button data-a="hz">注意地点に追加</button>${S.nav ? '' : '<button data-a="home">ここを出発地にする</button>'}`;
   const pop = L.popup().setLatLng(ll).setContent(div).openOn(map);
   div.querySelector('[data-a=stop]').onclick = () => { map.closePopup(pop); newStopDialog({ lat: ll.lat, lng: ll.lng, address: nearLabel(ll.lat, ll.lng) }); };
   div.querySelector('[data-a=hz]').onclick = () => { map.closePopup(pop); hazardDialog(ll); };
-  div.querySelector('[data-a=home]').onclick = () => { map.closePopup(pop); S.settings.home = { lat: ll.lat, lng: ll.lng, label: nearLabel(ll.lat, ll.lng) }; S.settings.startMode = 'home'; save(); renderPlan(); toast('出発地を設定しました'); };
+  if (div.querySelector('[data-a=home]')) div.querySelector('[data-a=home]').onclick = () => { map.closePopup(pop); S.settings.home = { lat: ll.lat, lng: ll.lng, label: nearLabel(ll.lat, ll.lng) }; S.settings.startMode = 'home'; save(); renderPlan(); toast('出発地を設定しました'); };
 }
 
 /* ---------- 住所データ（オフライン検索用） ---------- */
@@ -420,7 +422,7 @@ function renderPlan() {
     </div>
     <div class="row small"><span class="muted">${esc(startText)}／終わり：${S.settings.endMode === 'return' ? '出発地に戻る' : '最後の配達先'}</span><button id="pRoute" style="flex:0 0 auto">変更</button></div>
     <div class="subtabs"><button data-pv="todo" class="${view === 'todo' ? 'on' : ''}">未配達（${total - done}）</button><button data-pv="done" class="${view === 'done' ? 'on' : ''}">配達完了（${done}）</button></div>
-    <div id="stopList">${p.stops.map((s, i) => ((view === 'done') === (s.status === 'done') ? stopRow(p, s, i) : '')).join('') || (total ? `<p class="muted">${view === 'done' ? 'まだ配達完了はありません。' : '未配達はありません。お疲れさまでした。'}</p>` : '<p class="muted">配達先がまだありません。「＋ 地点を追加」から登録してください。地図を長押ししても追加できます。</p>')}</div>
+    <div id="stopList">${p.stops.map((s, i) => ((view === 'done') === (s.status === 'done') ? stopRow(p, s, i) : '')).join('') || (total ? `<p class="muted">${view === 'done' ? 'まだ配達完了はありません。' : '未配達はありません。お疲れさまでした。'}</p>` : '<p class="muted">配達先がまだありません。「＋ 地点を追加」から登録してください。地図をタップしても追加できます。</p>')}</div>
     <h3>このプラン</h3>
     <div class="btngrid"><button id="pNew2">新しいプラン</button><button id="pRename">名前を変える</button><button id="pReset">完了を全部戻す</button><button id="pDel" class="danger">プランを削除</button></div>`;
   $('pSel').onchange = (e) => { S.planId = e.target.value; S.expanded = null; save(); renderPlan(); renderStops(); };
@@ -1247,7 +1249,7 @@ async function renderSettings() {
     <h3>よく使う住所（${S.favorites.length}件）</h3>
     <button id="stFav" style="width:100%">よく使う住所を編集する</button>
     <h3>注意地点（${S.hazards.length}件）</h3>
-    <p class="small muted">凍結しやすい所やチェーンを着けた所を登録すると、ナビ中に近づいたら知らせます。地図の長押しでも追加できます。</p>
+    <p class="small muted">凍結しやすい所やチェーンを着けた所を登録すると、ナビ中に近づいたら知らせます。地図をタップしても追加できます。</p>
     <button id="stHz" style="width:100%">地図をタップして追加</button>
     <h3>動作確認</h3>
     <button id="stDemo" style="width:100%">デモ走行（GPSなしでナビを試す）</button>
