@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第23版（2026年11月27日）';
+const APP_VERSION = '第24版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -389,7 +389,7 @@ async function onlineSearch(q) {
 function nearLabel(lat, lng) {
   let best = null, bd = Infinity;
   for (const a of ADDR) { const d = GC.hav(lat, lng, a.lat, a.lng); if (d < bd) { bd = d; best = a; } }
-  return best && bd < 4000 ? best.city + best.town + '付近' : `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  return best && bd < 4000 ? best.city + best.town : `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 async function geocode(q) {
   const on = await onlineSearch(q);
@@ -1798,6 +1798,9 @@ async function boot() {
       if (!st.settings || !st.settings.v) { S.settings.v = 2; S.settings.area = Object.assign({}, PRESET_AREAS.shinko); S.settings.maxZoom = 17; if (S.settings.voiceInput === undefined) S.settings.voiceInput = true; }
       if (S.settings.v < 3) { S.settings.v = 3; if (S.settings.mapSource === 'gsi_std') S.settings.mapSource = BASE_MAP; if (!S.settings.photoZoom) S.settings.photoZoom = 17; } }
   } catch (e) { toast('この端末ではデータを保存できないようです'); }
+  // 以前の版で住所の最後に付いた「付近」を消す
+  const dropNear = (o) => { if (o && typeof o.address === 'string' && /付近$/.test(o.address)) o.address = o.address.replace(/付近$/, ''); };
+  S.favorites.forEach(dropNear); S.plans.forEach((p) => p.stops.forEach(dropNear));
   if (!plan() && S.plans[0]) S.planId = S.plans[0].id;
   setBaseLayer();
   await loadAddr();
