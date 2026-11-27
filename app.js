@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第14版（2026年11月27日）';
+const APP_VERSION = '第15版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -783,25 +783,142 @@ async function navFixPosition() {
   undoToast('今いる場所を正しい位置として登録しました', () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderStops(); });
 }
 
+/* ---------- 字ごとに選んで、まとめて追加 ---------- */
+function homeTowns() { return ADDR.filter((a) => a.city === HOME_AREA.city && a.group === HOME_AREA.town); }
+function favAza(f, towns) {
+  towns = towns || homeTowns();
+  const addr = normAddr(f.address || '');
+  let best = null;
+  towns.forEach((t) => { const k = normAddr(t.leaf); if (k && addr.includes(normAddr(HOME_AREA.town) + k) && (!best || k.length > normAddr(best.leaf).length)) best = t; });
+  if (!best) towns.forEach((t) => { const k = normAddr(t.leaf); if (k.length >= 2 && addr.includes(k) && (!best || k.length > normAddr(best.leaf).length)) best = t; });
+  if (best) return best.leaf;
+  if (f.lat && /信更/.test(f.address || '')) {
+    let nb = null, nd = Infinity;
+    towns.forEach((t) => { const d = GC.hav(f.lat, f.lng, t.lat, t.lng); if (d < nd) { nd = d; nb = t; } });
+    if (nb && nd < 2500) return nb.leaf;
+  }
+  return 'その他';
+}
+const FS = { sel: new Set() };
+function inTodayPlan(f) { const p = plan(); return !!p && p.stops.some((s) => s.favId === f.id || (s.name === f.name && s.address === f.address)); }
+function favGroupsHtml(filter) {
+  const towns = homeTowns();
+  const order = towns.map((t) => t.leaf).concat(['その他']);
+  const list = favList(filter);
+  const groups = {};
+  list.forEach((f) => { const a = favAza(f, towns); (groups[a] = groups[a] || []).push(f); });
+  const open = new Set(S.settings.openAza || []);
+  const q = (filter || '').trim();
+  const html = order.filter((a) => groups[a]).map((a) => {
+    const fs = groups[a].sort((x, y) => (x.name || x.address).localeCompare(y.name || y.address, 'ja'));
+    const isOpen = q ? true : open.has(a);
+    const nSel = fs.filter((f) => FS.sel.has(f.id)).length, nIn = fs.filter(inTodayPlan).length;
+    return `<div class="aza">
+      <button class="aza-h ${isOpen ? 'open' : ''}" data-aza="${esc(a)}"><span>${isOpen ? '▼' : '▶'} ${esc(a)}</span><em>${fs.length}軒${nIn ? `・追加済み ${nIn}` : ''}${nSel ? `・<b>選択 ${nSel}</b>` : ''}</em></button>
+      ${isOpen ? `<div class="aza-b">${fs.map((f) => { const added = inTodayPlan(f), on = FS.sel.has(f.id); return `<div class="fsel ${on ? 'on' : ''} ${added ? 'added' : ''}" data-fs="${f.id}">
+          <span class="ck">${added ? '済' : on ? '✓' : ''}</span>
+          <div class="body"><div class="name">${esc(f.name || f.address)}</div>${f.name ? `<div class="addr">${esc((f.address || '').replace(HOME_AREA.city + HOME_AREA.town, ''))}</div>` : ''}<div class="tags">${stopTags(f)}</div></div></div>`; }).join('')}
+        <button class="aza-all" data-azall="${esc(a)}">この字を全部選ぶ</button></div>` : ''}
+    </div>`;
+  }).join('');
+  return html || '<p class="muted">見つかりません</p>';
+}
+function bindFavGroups() {
+  const box = $('fvList'); if (!box) return;
+  box.querySelectorAll('[data-aza]').forEach((b) => {
+    b.onclick = () => {
+      const a = b.dataset.aza, open = new Set(S.settings.openAza || []);
+      open.has(a) ? open.delete(a) : open.add(a);
+      S.settings.openAza = [...open]; save(); drawFavGroups();
+    };
+  });
+  box.querySelectorAll('[data-fs]').forEach((d) => {
+    d.onclick = () => {
+      const f = S.favorites.find((x) => x.id === d.dataset.fs); if (!f) return;
+      if (inTodayPlan(f)) return toast('この家は、もう今日の配達先に入っています');
+      FS.sel.has(f.id) ? FS.sel.delete(f.id) : FS.sel.add(f.id);
+      drawFavGroups();
+    };
+  });
+  box.querySelectorAll('[data-azall]').forEach((b) => {
+    b.onclick = () => {
+      const towns = homeTowns();
+      const fs = favList($('fvQ') ? $('fvQ').value : '').filter((f) => favAza(f, towns) === b.dataset.azall && !inTodayPlan(f));
+      const allOn = fs.every((f) => FS.sel.has(f.id));
+      fs.forEach((f) => (allOn ? FS.sel.delete(f.id) : FS.sel.add(f.id)));
+      drawFavGroups();
+    };
+  });
+  const bar = $('fsBar');
+  if (bar) {
+    bar.classList.toggle('hidden', FS.sel.size === 0);
+    $('fsCount').textContent = FS.sel.size;
+  }
+}
+function drawFavGroups() {
+  const box = $('fvList'); if (!box) return;
+  const y = $('pane-add').scrollTop;
+  box.innerHTML = favGroupsHtml($('fvQ') ? $('fvQ').value : '');
+  bindFavGroups();
+  $('pane-add').scrollTop = y;
+}
+const SLOT_OPTS = () => TIME_SLOTS.map((t) => `<option value="${t.k}">${t.label}</option>`).join('');
+function batchAddDialog() {
+  const fs = [...FS.sel].map((id) => S.favorites.find((f) => f.id === id)).filter(Boolean);
+  if (!fs.length) return;
+  openModal(`<h2>${fs.length}件を今日の配達に追加</h2>
+    <p class="small muted">今日だけの情報があれば選んでください。何も選ばなければ「時間帯：指定なし」で追加します。置き配や詳しい情報は、前回の内容のままです。</p>
+    <div class="ba-all"><span>全部に同じ時間帯：</span><select id="baAll"><option value="-">選ばない</option>${SLOT_OPTS()}</select></div>
+    ${fs.map((f) => `<div class="ba-row" data-ba="${f.id}">
+      <div class="name">${esc(f.name || f.address)}</div>
+      <div class="ba-ctl">
+        <select class="ba-slot">${SLOT_OPTS()}</select>
+        <select class="ba-temp">${TEMPS.map((t) => `<option value="${t.k}" ${(f.temp || '') === t.k ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
+        <select class="ba-kind">${KINDS.map((t) => `<option value="${t.k}" ${(f.kind || 'deliver') === t.k ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
+        <div class="ba-yen"><input class="ba-collect" inputmode="numeric" placeholder="コレクト"><span>円</span></div>
+      </div></div>`).join('')}
+    <div class="modal-btns"><button id="baNo">戻る</button><button id="baOk" class="primary">${fs.length}件を追加</button></div>`, (box) => {
+    $('baAll').onchange = (e) => { if (e.target.value !== '-') box.querySelectorAll('.ba-slot').forEach((s) => { s.value = e.target.value; }); };
+    $('baNo').onclick = closeModal;
+    $('baOk').onclick = () => {
+      const p = plan() || newPlan();
+      box.querySelectorAll('[data-ba]').forEach((row) => {
+        const f = S.favorites.find((x) => x.id === row.dataset.ba); if (!f) return;
+        const collect = parseInt((row.querySelector('.ba-collect').value || '').normalize('NFKC').replace(/[^0-9]/g, ''), 10) || 0;
+        p.stops.push({ id: uid(), name: f.name || '', address: f.address || '', memo: f.memo || '', lat: f.lat, lng: f.lng, approx: false, priority: false,
+          slot: row.querySelector('.ba-slot').value, kind: row.querySelector('.ba-kind').value, temp: row.querySelector('.ba-temp').value,
+          okihai: f.okihai || '', collect, favId: f.id, status: 'todo' });
+        f.uses = (f.uses || 0) + 1; f.last = Date.now();
+      });
+      p.estimate = null; FS.sel.clear(); save(); closeModal();
+      renderStops(); renderPlan(); renderAdd();
+      toast(`${fs.length}件を追加しました（全部で${p.stops.length}件）`, 3500);
+    };
+  });
+}
+
 /* ---------- 地点を追加 ---------- */
 function renderAdd() {
   const towns = ADDR.filter((a) => a.city === HOME_AREA.city && a.group === HOME_AREA.town);
   const lastTown = S.settings.lastTown || '氷ノ田';
-  const favs = favList('').slice(0, 30);
   $('pane-add').innerHTML = `
-    <h3>住所を選んで追加</h3>
+    <h3>よく配達する家（${S.favorites.length}軒）</h3>
+    ${S.favorites.length ? `<p class="small muted">字を開いて、今日の荷物の家を押して選び、下の「追加」を押してください。</p>${withMic('<input id="fvQ" placeholder="名前や住所で探す">', 'fvQ')}<div id="fvList">${favGroupsHtml('')}</div><button id="fvManage" style="width:100%;margin-top:8px">よく配達する家を編集する</button>` : '<p class="small muted">一度登録した家は、自動でここに字ごとに入ります。次からは選んで「追加」を押すだけです。</p>'}
+    <h3>新しい住所を追加</h3>
     <div class="row"><b style="flex:0 0 auto">${esc(HOME_AREA.city + HOME_AREA.town)}</b><select id="adTown">${towns.map((t) => `<option ${t.leaf === lastTown ? 'selected' : ''}>${esc(t.leaf)}</option>`).join('')}</select></div>
     <label>番地</label>${withMic('<input id="adNum" inputmode="text" placeholder="例：1234-5">', 'adNum')}
     <label>名前</label>${withMic('<input id="adName" placeholder="例：山田様">', 'adName')}
     <button id="adGo" class="primary" style="width:100%;margin-top:10px">この住所で追加</button>
-    <h3>よく使う住所（${S.favorites.length}件）</h3>
-    ${S.favorites.length ? `${withMic('<input id="fvQ" placeholder="名前や住所で探す">', 'fvQ')}<div id="fvList">${favs.map(favRow).join('')}</div><button id="fvManage" style="width:100%;margin-top:8px">よく使う住所を編集する</button>` : '<p class="small muted">一度登録した住所は、自動でここに入ります。次からはタップするだけで追加できます。</p>'}
     <h3>ほかの方法で探す</h3>
     ${withMic('<input id="aQ" placeholder="ほかの地域の住所や地名" enterkeyhint="search">', 'aQ')}
     <button id="aGo" style="width:100%;margin-top:6px">検索</button>
     <div id="aRes"></div>
-    <div class="btngrid" style="margin-top:10px"><button id="aMap">地図をタップして追加</button><button id="aHere">今いる場所を追加</button><button id="aBulk">まとめて登録</button><button id="aHz">注意地点を追加</button></div>`;
+    <div class="btngrid" style="margin-top:10px"><button id="aMap">地図をタップして追加</button><button id="aHere">今いる場所を追加</button><button id="aBulk">まとめて登録</button><button id="aHz">注意地点を追加</button></div>
+    <div id="fsBar" class="hidden"><button id="fsClear">選択をやめる</button><button id="fsAdd" class="ok">選んだ <b id="fsCount">0</b> 件を追加</button></div>`;
   bindMics($('pane-add'));
+  bindFavGroups();
+  $('fsAdd').onclick = batchAddDialog;
+  $('fsClear').onclick = () => { FS.sel.clear(); drawFavGroups(); };
   $('adGo').onclick = async () => {
     const town = $('adTown').value, num = $('adNum').value.trim().normalize('NFKC'), name = $('adName').value.trim();
     S.settings.lastTown = town; save();
@@ -820,11 +937,7 @@ function renderAdd() {
     newStopDialog(Object.assign({ address, name }, fav ? { okihai: fav.okihai, temp: fav.temp, kind: fav.kind, memo: fav.memo, lat: fav.lat, lng: fav.lng, approx: false, favId: fav.id } : pos));
 
   };
-  const bindFavRows = () => document.querySelectorAll('#fvList [data-fav]').forEach((d) => {
-    d.onclick = () => { const f = S.favorites.find((x) => x.id === d.dataset.fav); map.setView([f.lat, f.lng], 17); newStopDialog({ fromFav: true, favId: f.id, address: f.address, name: f.name, lat: f.lat, lng: f.lng, okihai: f.okihai, temp: f.temp, kind: f.kind, memo: f.memo }); };
-  });
-  bindFavRows();
-  if ($('fvQ')) $('fvQ').oninput = () => { $('fvList').innerHTML = favList($('fvQ').value).slice(0, 30).map(favRow).join('') || '<p class="muted">見つかりません</p>'; bindFavRows(); };
+  if ($('fvQ')) $('fvQ').oninput = drawFavGroups;
   if ($('fvManage')) $('fvManage').onclick = favManager;
   const go = async () => {
     const q = $('aQ').value.trim(); if (!q) return;
