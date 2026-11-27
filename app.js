@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第19版（2026年11月27日）';
+const APP_VERSION = '第20版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -508,13 +508,39 @@ function renderPlan() {
     </div>
     <div class="row small"><span class="muted">${esc(startText)}／終わり：${S.settings.endMode === 'return' ? '出発地に戻る' : '最後の配達先'}</span><button id="pRoute" style="flex:0 0 auto">変更</button></div>
     <div class="subtabs"><button data-pv="todo" class="${view === 'todo' ? 'on' : ''}">未配達（${total - done}）</button><button data-pv="done" class="${view === 'done' ? 'on' : ''}">配達完了（${done}）</button></div>
-    <div id="stopList">${p.stops.map((s, i) => ((view === 'done') === (s.status === 'done') ? stopRow(p, s, i) : '')).join('') || (total ? `<p class="muted">${view === 'done' ? 'まだ配達完了はありません。' : '未配達はありません。お疲れさまでした。'}</p>` : '<p class="muted">配達先がまだありません。「＋ 地点を追加」から登録してください。地図をタップしても追加できます。</p>')}</div>
+    <div id="stopList">${(() => {
+      const vis = p.stops.filter((s) => (view === 'done') === (s.status === 'done'));
+      PS.sel.forEach((id) => { if (!vis.some((s) => s.id === id)) PS.sel.delete(id); });
+      if (!vis.length) return '';
+      const nOn = vis.filter((s) => PS.sel.has(s.id)).length, st = nOn === vis.length ? 'on' : nOn ? 'part' : '';
+      return `<div class="stop-all ${st}" id="psAll"><span class="ckb">${st === 'on' ? '✓' : st === 'part' ? '－' : ''}</span><div><b>全部選択</b><div class="small muted">${nOn ? `${nOn}件を選んでいます` : `${vis.length}件をまとめて選びます`}</div></div></div>`;
+    })()}${p.stops.map((s, i) => ((view === 'done') === (s.status === 'done') ? stopRow(p, s, i) : '')).join('') || (total ? `<p class="muted">${view === 'done' ? 'まだ配達完了はありません。' : '未配達はありません。お疲れさまでした。'}</p>` : '<p class="muted">配達先がまだありません。「＋ 地点を追加」から登録してください。地図をタップしても追加できます。</p>')}
+    ${PS.sel.size ? `<div id="psBar"><button id="psClear">やめる</button><button id="psGo" class="${view === 'done' ? 'accent' : 'ok'}"><b>${PS.sel.size}</b>件を${view === 'done' ? '未配達に戻す' : '配達完了にする'}</button></div>` : ''}</div>
     <h3>このプラン</h3>
     <div class="btngrid"><button id="pNew2">新しいプラン</button><button id="pRename">名前を変える</button><button id="pReset">完了を全部戻す</button><button id="pDel" class="danger">プランを削除</button></div>`;
-  $('pSel').onchange = (e) => { S.planId = e.target.value; S.expanded = null; save(); renderPlan(); renderStops(); };
+  $('pSel').onchange = (e) => { S.planId = e.target.value; S.expanded = null; PS.sel.clear(); save(); renderPlan(); renderStops(); };
   $('pOpt').onclick = optimizePlan;
   $('pNav').onclick = chooseDeliveryMode;
-  el.querySelectorAll('[data-pv]').forEach((b) => { b.onclick = () => { S.planView = b.dataset.pv; S.expanded = null; renderPlan(); }; });
+  el.querySelectorAll('[data-pv]').forEach((b) => { b.onclick = () => { S.planView = b.dataset.pv; S.expanded = null; PS.sel.clear(); renderPlan(); }; });
+  el.querySelectorAll('[data-ck]').forEach((c) => { c.onclick = (ev) => { ev.stopPropagation(); const id = c.dataset.ck; PS.sel.has(id) ? PS.sel.delete(id) : PS.sel.add(id); renderPlanKeep(); }; });
+  if ($('psAll')) $('psAll').onclick = () => {
+    const vis = p.stops.filter((s) => (view === 'done') === (s.status === 'done'));
+    const allOn = vis.every((s) => PS.sel.has(s.id));
+    vis.forEach((s) => (allOn ? PS.sel.delete(s.id) : PS.sel.add(s.id)));
+    renderPlanKeep();
+  };
+  if ($('psClear')) $('psClear').onclick = () => { PS.sel.clear(); renderPlanKeep(); };
+  if ($('psGo')) $('psGo').onclick = () => {
+    const targets = p.stops.filter((s) => PS.sel.has(s.id));
+    const before = targets.map((s) => ({ s, status: s.status, doneAt: s.doneAt, lastResult: s.lastResult, logLen: (s.log || []).length }));
+    const to = view === 'done' ? 'todo' : 'done';
+    targets.forEach((s) => setStatus(s, to));
+    PS.sel.clear(); renderPlanKeep(); renderStops();
+    undoToast(`${targets.length}件を${to === 'done' ? '配達完了' : '未配達'}にしました`, () => {
+      before.forEach((b) => { b.s.status = b.status; b.s.doneAt = b.doneAt; b.s.lastResult = b.lastResult; if (b.s.log) b.s.log.length = b.logLen; });
+      save(); renderPlanKeep(); renderStops();
+    });
+  };
   $('pAdd').onclick = () => showTab('add');
   $('pBulk').onclick = bulkDialog;
   $('pRoute').onclick = routeSettingsDialog;
@@ -530,11 +556,13 @@ function renderPlan() {
   el.querySelectorAll('.stop').forEach((row) => { row.onclick = () => { S.expanded = S.expanded === row.dataset.sid ? null : row.dataset.sid; renderPlan(); }; });
   el.querySelectorAll('[data-act]').forEach((b) => { b.onclick = (ev) => { ev.stopPropagation(); stopAction(b.dataset.act, b.dataset.id); }; });
 }
+const PS = { sel: new Set() };
+function renderPlanKeep() { const y = $('pane-plan').scrollTop; renderPlan(); $('pane-plan').scrollTop = y; }
 function stopRow(p, s, i) {
   const nextIdx = nextStopIndex(p);
   const cls = s.status === 'todo' && i === nextIdx ? 'next' : (s.status === 'todo' ? '' : s.status);
   const tags = [s.status !== 'todo' ? `<span class="st-${s.status}">${STATUS[s.status] || ''}${s.doneAt ? ' ' + new Date(s.doneAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''}</span>` : (s.lastResult ? `<span class="st-${s.lastResult}">前回 ${STATUS[s.lastResult]}</span>` : ''), stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? (s.chibanEst ? '<span class="warn">地番から推定（「位置を直す」で確認）</span>' : '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>') : ''].join('');
-  let html = `<div class="stop ${cls}" data-sid="${s.id}"><div class="num">${i + 1}</div><div class="body">
+  let html = `<div class="stop ${cls} ${PS.sel.has(s.id) ? 'sel' : ''}" data-sid="${s.id}"><span class="ckb" data-ck="${s.id}">${PS.sel.has(s.id) ? '✓' : ''}</span><div class="num">${i + 1}</div><div class="body">
     <div class="name">${esc(stopLabel(s))}</div>${s.name && s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
     ${s.memo ? `<div class="addr">📝 ${esc(s.memo)}</div>` : ''}<div class="tags">${tags}</div></div></div>`;
   if (S.expanded === s.id) {

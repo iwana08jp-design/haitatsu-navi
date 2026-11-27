@@ -1,5 +1,5 @@
 /* オフラインでもアプリ本体が開けるようにする */
-const VERSION = 'haitatsu-navi-v19';
+const VERSION = 'haitatsu-navi-v20';
 const CORE = ['./', 'index.html', 'app.css', 'app.js', 'db.js', 'graph-core.js', 'graph-worker.js',
   'leaflet.js', 'leaflet.css', 'addresses.json', 'chiban.json', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(CORE.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });
