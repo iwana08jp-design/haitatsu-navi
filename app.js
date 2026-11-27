@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第15版（2026年11月27日）';
+const APP_VERSION = '第16版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -66,6 +66,7 @@ const plan = () => S.plans.find((p) => p.id === S.planId);
 
 let saveTimer = null;
 function save() {
+  calibCache = null;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards, favorites: S.favorites, drawings: S.drawings }).catch((e) => toast('保存できませんでした：' + e.message));
@@ -360,7 +361,7 @@ function newPlan(name) {
 function addStop(o, focus) {
   const p = plan() || newPlan();
   const s = { id: uid(), name: o.name || '', address: o.address || '', memo: o.memo || '', lat: o.lat, lng: o.lng,
-    approx: !!o.approx, priority: false, slot: o.slot || '', kind: o.kind || 'deliver', temp: o.temp || '', okihai: o.okihai || '', collect: o.collect || 0, favId: o.favId || null, status: 'todo' };
+    approx: !!o.approx, priority: false, slot: o.slot || '', kind: o.kind || 'deliver', temp: o.temp || '', okihai: o.okihai || '', collect: o.collect || 0, favId: o.favId || null, posSrc: o.posSrc || '', chibanEst: !!o.chibanEst, status: 'todo' };
   p.stops.push(s); p.estimate = null; save(); renderPlan(); renderStops();
   toast(`${p.stops.length}件目を追加しました`);
   if (focus) map.panTo([s.lat, s.lng]);
@@ -382,7 +383,7 @@ function renderStops() {
     m.on('dragstart', () => { m._from = { lat: s.lat, lng: s.lng, approx: s.approx }; });
     m.on('dragend', () => {
       const ll = m.getLatLng(), from = m._from;
-      s.lat = ll.lat; s.lng = ll.lng; s.approx = false; p.estimate = null; updateFavoriteFromStop(s); save(); renderPlan(); renderStops();
+      s.lat = ll.lat; s.lng = ll.lng; s.approx = false; s.posSrc = 'user'; s.chibanEst = false; p.estimate = null; updateFavoriteFromStop(s); save(); renderPlan(); renderStops();
       undoToast(`${i + 1}番「${stopLabel(s)}」の位置を動かしました`, () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderPlan(); renderStops(); toast('元の位置に戻しました'); });
     });
     m.addTo(stopLayer);
@@ -458,7 +459,7 @@ function renderPlan() {
 function stopRow(p, s, i) {
   const nextIdx = nextStopIndex(p);
   const cls = s.status === 'todo' && i === nextIdx ? 'next' : (s.status === 'todo' ? '' : s.status);
-  const tags = [s.status !== 'todo' ? `<span class="st-${s.status}">${STATUS[s.status] || ''}${s.doneAt ? ' ' + new Date(s.doneAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''}</span>` : (s.lastResult ? `<span class="st-${s.lastResult}">前回 ${STATUS[s.lastResult]}</span>` : ''), stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>' : ''].join('');
+  const tags = [s.status !== 'todo' ? `<span class="st-${s.status}">${STATUS[s.status] || ''}${s.doneAt ? ' ' + new Date(s.doneAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''}</span>` : (s.lastResult ? `<span class="st-${s.lastResult}">前回 ${STATUS[s.lastResult]}</span>` : ''), stopTags(s), s.priority ? '<span class="pri">先に回る</span>' : '', s.approx ? (s.chibanEst ? '<span class="warn">地番から推定（「位置を直す」で確認）</span>' : '<span class="warn">位置はおおよそ（「位置を直す」で修正）</span>') : ''].join('');
   let html = `<div class="stop ${cls}" data-sid="${s.id}"><div class="num">${i + 1}</div><div class="body">
     <div class="name">${esc(stopLabel(s))}</div>${s.name && s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
     ${s.memo ? `<div class="addr">📝 ${esc(s.memo)}</div>` : ''}<div class="tags">${tags}</div></div></div>`;
@@ -585,14 +586,14 @@ function findFavorite(o) {
 }
 function saveFavorite(o) {
   const ex = findFavorite(o);
-  const fields = { address: o.address || '', name: o.name || '', lat: o.lat, lng: o.lng, okihai: o.okihai || '', temp: o.temp || '', kind: o.kind || 'deliver', memo: o.memo || '' };
+  const fields = { address: o.address || '', name: o.name || '', lat: o.lat, lng: o.lng, posSrc: o.posSrc || '', okihai: o.okihai || '', temp: o.temp || '', kind: o.kind || 'deliver', memo: o.memo || '' };
   if (ex) { Object.assign(ex, fields); ex.uses = (ex.uses || 0) + 1; ex.last = Date.now(); }
   else S.favorites.push(Object.assign({ id: uid(), uses: 1, last: Date.now() }, fields));
   save();
 }
 function updateFavoriteFromStop(s) {
   const ex = s.favId ? S.favorites.find((f) => f.id === s.favId) : findFavorite(s);
-  if (ex) { Object.assign(ex, { address: s.address, name: s.name, okihai: s.okihai, temp: s.temp, kind: s.kind, memo: s.memo, lat: s.lat, lng: s.lng }); save(); }
+  if (ex) { Object.assign(ex, { address: s.address, name: s.name, okihai: s.okihai, temp: s.temp, kind: s.kind, memo: s.memo, lat: s.lat, lng: s.lng, posSrc: s.posSrc || ex.posSrc }); save(); }
 }
 function favList(filter) {
   const q = normAddr(filter || '');
@@ -755,7 +756,7 @@ function placeMode(s, isNew) {
   map.setView([s.lat, s.lng], Math.max(map.getZoom(), 18));
   let ov = $('placeUI');
   if (!ov) { ov = document.createElement('div'); ov.id = 'placeUI'; document.body.appendChild(ov); }
-  ov.innerHTML = `<div class="pl-top"><b>${esc(stopLabel(s))}</b><br>${isNew ? '番地の位置までは分からないため、地名の中心に置きました。' : ''}地図を指で動かして、<b>真ん中の＋</b>を家に合わせてください。</div>
+  ov.innerHTML = `<div class="pl-top"><b>${esc(stopLabel(s))}</b><br>${isNew ? (s.chibanEst ? '地番から推定した場所です。合っていれば、そのまま「ここに決定」を押してください。' : '番地の位置までは分からないため、地名の中心に置きました。') : ''}地図を指で動かして、<b>真ん中の＋</b>を家に合わせてください。</div>
     <svg class="pl-cross" viewBox="0 0 80 80"><path d="M40 4V32M40 48V76M4 40H32M48 40H76" stroke="#fff" stroke-width="9" stroke-linecap="round"/><path d="M40 4V32M40 48V76M4 40H32M48 40H76" stroke="#c8442f" stroke-width="4" stroke-linecap="round"/><circle cx="40" cy="40" r="4" fill="#c8442f" stroke="#fff" stroke-width="2"/></svg>
     <div class="pl-btns"><button id="plPhoto">${S.settings.mapSource === 'gsi_photo' ? '🗺 地図に戻す' : '📷 航空写真'}</button><button id="plHere">📍 今いる場所</button><button id="plNo">やめる</button><button id="plOk" class="ok">ここに決定</button></div>`;
   ov.classList.remove('hidden');
@@ -766,7 +767,7 @@ function placeMode(s, isNew) {
   $('plNo').onclick = close;
   $('plOk').onclick = () => {
     const c = map.getCenter();
-    s.lat = c.lat; s.lng = c.lng; s.approx = false;
+    s.lat = c.lat; s.lng = c.lng; s.approx = false; s.posSrc = 'user'; s.chibanEst = false;
     const p = plan(); if (p) p.estimate = null;
     updateFavoriteFromStop(s); save(); close(); renderPlan(); renderStops();
     undoToast(`「${stopLabel(s)}」の位置を決めました`, () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderPlan(); renderStops(); });
@@ -779,8 +780,112 @@ async function navFixPosition() {
   if (!pos) return toast('現在地が分かりません');
   if (!(await ask(`今いる場所を「${stopLabel(s)}」の正しい位置として登録しますか？（よく使う住所にも反映します）`, '登録する'))) return;
   const from = { lat: s.lat, lng: s.lng, approx: s.approx };
-  s.lat = pos.lat; s.lng = pos.lng; s.approx = false; updateFavoriteFromStop(s); save(); renderStops();
+  s.lat = pos.lat; s.lng = pos.lng; s.approx = false; s.posSrc = 'user'; s.chibanEst = false; updateFavoriteFromStop(s); save(); renderStops();
   undoToast('今いる場所を正しい位置として登録しました', () => { Object.assign(s, from); updateFavoriteFromStop(s); save(); renderStops(); });
+}
+
+/* ---------- 地番データ（法務省 登記所備付地図）から位置を推定 ---------- */
+let CHIBAN = null; // {sheets:[], aza:{字:Map(地番→[sheet,x,y,size])}}
+async function loadChiban() {
+  try {
+    const d = await (await fetch('chiban.json')).json();
+    const aza = {};
+    Object.entries(d.aza).forEach(([a, s]) => { const m = new Map(); s.split(';').forEach((r) => { const p = r.split(','); m.set(p[0], [+p[1], +p[2], +p[3], +p[4]]); }); aza[a] = m; });
+    CHIBAN = { sheets: d.sheets, aza, src: d.src };
+  } catch (e) { CHIBAN = null; }
+}
+function normChiban(s) {
+  s = String(s || '').normalize('NFKC').replace(/\s/g, '').replace(/[ー－‐−―の之]/g, '-').replace(/番地|番/g, '-').replace(/号$/, '').replace(/-+$/, '').replace(/-+/g, '-');
+  return s;
+}
+/* 住所から 字 と 地番 を取り出し、データの中から探す */
+function findParcel(address) {
+  if (!CHIBAN || !address) return null;
+  const a = String(address).normalize('NFKC').replace(/\s/g, ' ');
+  const i = a.indexOf(HOME_AREA.town); if (i < 0) return null;
+  const rest = a.slice(i + HOME_AREA.town.length).replace(/^大字|^字/, '');
+  const aza = Object.keys(CHIBAN.aza).sort((x, y) => y.length - x.length).find((k) => normAddr(rest).startsWith(normAddr(k)));
+  if (!aza) return null;
+  const numPart = rest.slice(rest.indexOf(aza.slice(-1)) + 1).trim();
+  const ch = normChiban((numPart.match(/[0-9０-９][0-9０-９\-ー－‐−の番地号]*/) || [])[0] || '');
+  if (!ch) return null;
+  const m = CHIBAN.aza[aza];
+  let hit = m.get(ch), used = ch;
+  if (!hit) { const base = ch.split('-')[0]; if (m.get(base)) { hit = m.get(base); used = base; } else { for (const [k, v] of m) if (k.split('-')[0] === base) { hit = v; used = k; break; } } }
+  if (!hit) return null;
+  return { aza, chiban: used, asked: ch, sheet: hit[0], x: hit[1], y: hit[2], size: hit[3] };
+}
+/* 目印（ユーザーが正しく合わせた家）から、図面ごとの重ね合わせを計算 */
+let calibCache = null;
+function controlPoints() {
+  const items = [];
+  S.favorites.forEach((f) => items.push(f));
+  S.plans.forEach((p) => p.stops.forEach((s) => items.push(s)));
+  const byKey = new Map();
+  items.forEach((o) => {
+    if (o.posSrc !== 'user' || o.lat == null) return;
+    const pc = findParcel(o.address); if (!pc) return;
+    byKey.set(pc.aza + '|' + pc.chiban, { sheet: pc.sheet, x: pc.x, y: pc.y, lat: o.lat, lng: o.lng });
+  });
+  return [...byKey.values()];
+}
+function calib() {
+  if (calibCache) return calibCache;
+  const bySheet = {};
+  controlPoints().forEach((c) => (bySheet[c.sheet] = bySheet[c.sheet] || []).push(c));
+  const out = {};
+  Object.entries(bySheet).forEach(([sh, pts]) => { const t = fitSheet(pts); if (t) out[sh] = t; });
+  calibCache = out; return out;
+}
+function fitSheet(pts) {
+  if (pts.length < 2) return null;
+  const lat0 = pts.reduce((a, p) => a + p.lat, 0) / pts.length, lng0 = pts.reduce((a, p) => a + p.lng, 0) / pts.length;
+  const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540;
+  // 図面の X=北, Y=東 として右手系に（u=Y, v=X）
+  let P = pts.map((p) => ({ u: p.y, v: p.x, E: (p.lng - lng0) * kx, N: (p.lat - lat0) * ky }));
+  const fit = (P) => {
+    if (P.length < 5) { // 相似変換（回転・縮尺・移動）を最小二乗で。目印が少ないうちは形を崩さない
+      const n = P.length, mu = P.reduce((a, p) => a + p.u, 0) / n, mv = P.reduce((a, p) => a + p.v, 0) / n, mE = P.reduce((a, p) => a + p.E, 0) / n, mN = P.reduce((a, p) => a + p.N, 0) / n;
+      let re = 0, im = 0, den = 0;
+      P.forEach((p) => { const su = p.u - mu, sv = p.v - mv, dE = p.E - mE, dN = p.N - mN; re += dE * su + dN * sv; im += dN * su - dE * sv; den += su * su + sv * sv; });
+      if (den < 1) return null; re /= den; im /= den;
+      return { f: (u, v) => [re * (u - mu) - im * (v - mv) + mE, im * (u - mu) + re * (v - mv) + mN], scale: Math.hypot(re, im) };
+    }
+    // アフィン（最小二乗）
+    let S = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], bE = [0, 0, 0], bN = [0, 0, 0];
+    P.forEach((p) => { const r = [p.u, p.v, 1]; for (let i = 0; i < 3; i++) { for (let j = 0; j < 3; j++) S[i][j] += r[i] * r[j]; bE[i] += r[i] * p.E; bN[i] += r[i] * p.N; } });
+    const solve = (A, b) => { const M = A.map((r, i) => r.concat([b[i]])); for (let c = 0; c < 3; c++) { let piv = c; for (let r = c + 1; r < 3; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r; [M[c], M[piv]] = [M[piv], M[c]]; if (Math.abs(M[c][c]) < 1e-9) return null; for (let r = 0; r < 3; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k < 4; k++) M[r][k] -= f * M[c][k]; } } return [M[0][3] / M[0][0], M[1][3] / M[1][1], M[2][3] / M[2][2]]; };
+    const e = solve(S, bE), n = solve(S, bN);
+    if (!e || !n) return null;
+    return { f: (u, v) => [e[0] * u + e[1] * v + e[2], n[0] * u + n[1] * v + n[2]], scale: Math.sqrt(Math.abs(e[0] * n[1] - e[1] * n[0])) };
+  };
+  let t = fit(P); if (!t) return null;
+  const resid = (t) => P.map((p) => { const [E, N] = t.f(p.u, p.v); return Math.hypot(E - p.E, N - p.N); });
+  let r = resid(t);
+  if (P.length >= 4) { const worst = r.indexOf(Math.max(...r)); if (r[worst] > 100) { P = P.filter((_, i) => i !== worst); t = fit(P) || t; r = resid(t); } }
+  if (t.scale < 0.3 || t.scale > 3) return null; // おかしな目印は使わない
+  return { n: P.length, err: Math.round(Math.max(0, ...r)), toLatLng: (x, y) => { const [E, N] = t.f(y, x); return { lat: lat0 + N / ky, lng: lng0 + E / kx }; } };
+}
+/* 住所 → 推定位置（目印が足りなければ null） */
+function estimateFromChiban(address) {
+  const pc = findParcel(address); if (!pc) return null;
+  const t = calib()[pc.sheet];
+  if (!t) return { parcel: pc, pos: null };
+  const ll = t.toLatLng(pc.x, pc.y);
+  return { parcel: pc, pos: ll, n: t.n };
+}
+function chibanStatusHtml() {
+  if (!CHIBAN) return '地番データを読み込めませんでした';
+  const c = calib(), cps = controlPoints();
+  const rows = Object.keys(CHIBAN.aza).map((a) => {
+    const sheets = [...new Set([...CHIBAN.aza[a].values()].map((v) => v[0]))];
+    const ok = sheets.filter((s) => c[s]).length;
+    const big = sheets.filter((s) => [...CHIBAN.aza[a].values()].filter((v) => v[0] === s).length >= 100);
+    const okBig = big.filter((s) => c[s]).length;
+    const pts = cps.filter((p) => sheets.includes(p.sheet)).length;
+    return `<div class="cb-row"><b>${esc(a)}</b><span>${okBig >= big.length && big.length ? '✅ 推定できます' : okBig ? `一部推定できます（${okBig}/${big.length}枚）` : `目印 ${pts} 軒（あと${Math.max(0, 2 - pts)}軒〜）`}</span></div>`;
+  }).join('');
+  return rows;
 }
 
 /* ---------- 字ごとに選んで、まとめて追加 ---------- */
@@ -925,7 +1030,9 @@ function renderAdd() {
     const address = HOME_AREA.city + HOME_AREA.town + town + (num ? ' ' + num : '');
     const base = towns.find((t) => t.leaf === town);
     let pos = { lat: base.lat, lng: base.lng, approx: true };
-    if (num && isOnline()) {
+    const est = num ? estimateFromChiban(address) : null;
+    if (est && est.pos) pos = { lat: est.pos.lat, lng: est.pos.lng, approx: true, chibanEst: true, posSrc: 'chiban' };
+    else if (num && isOnline()) {
       $('adGo').disabled = true; $('adGo').textContent = '場所を調べています…';
       const on = await onlineSearch(address.replace(' ', ''));
       const hit = on.find((r) => r.label.includes(town) && /\d/.test(r.label));
@@ -985,7 +1092,8 @@ function bulkDialog() {
       let ok = 0, approx = 0; const fail = [];
       for (let i = 0; i < lines.length; i++) {
         const parts = lines[i].split(/[,，、\t]/).map((x) => x.trim());
-        const r = await geocode(parts[0]);
+        const ce = estimateFromChiban(parts[0]);
+        const r = ce && ce.pos ? { lat: ce.pos.lat, lng: ce.pos.lng, approx: true, est: true } : await geocode(parts[0]);
         if (r) { addStop({ address: parts[0], name: parts[1] || '', memo: parts.slice(2).join(' '), slot: slotFromText(parts.slice(1).join(' ')), kind: /集荷/.test(lines[i]) ? 'pickup' : 'deliver', temp: /冷凍/.test(lines[i]) ? 'frozen' : /冷蔵/.test(lines[i]) ? 'chill' : '', collect: (() => { const m = lines[i].normalize('NFKC').match(/(コレクト|代引き?)\s*([0-9,]+)/); return m ? parseInt(m[2].replace(/,/g, ''), 10) : 0; })(), okihai: /置き?配\s*(不可|NG|ダメ)/i.test(lines[i]) ? 'ng' : /置き?配/.test(lines[i]) ? 'ok' : '', lat: r.lat, lng: r.lng, approx: r.approx }); ok++; if (r.approx) approx++; }
         else fail.push(parts[0]);
         $('bkProg').firstElementChild.style.width = ((i + 1) / lines.length * 100) + '%';
@@ -1370,6 +1478,9 @@ async function renderSettings() {
     <div class="progress hidden" id="rdProg"><div id="rdBar"></div></div><div id="rdMsg" class="small muted"></div>
     <div class="status-line" id="stUsage"></div>
     <label style="display:flex;gap:10px;align-items:center;color:var(--text)"><input type="checkbox" id="stAuto" style="width:24px;height:24px" ${st.autoCache ? 'checked' : ''}> 見た地図も自動で保存する</label>
+    <h3>地番から位置を推定（${CHIBAN ? Object.values(CHIBAN.aza).reduce((a, m) => a + m.size, 0).toLocaleString() + '筆' : '—'}）</h3>
+    <p class="small muted">法務省の地図には、信更町の地番と土地の形が入っています。ただ地図上の位置が付いていないので、字ごとに<b>2〜3軒「位置を直す」で正しく合わせると</b>、その字の残りの地番の場所を推定できるようになります。</p>
+    <div class="cb-list">${chibanStatusHtml()}</div>
     <h3>音声案内</h3>
     <div class="row"><button id="stVoice">${st.speech ? '🔊 音声あり' : '🔇 音声なし'}</button><button id="stVoiceTest">試しに話す</button></div>
     <h3>音声入力</h3>
@@ -1385,7 +1496,7 @@ async function renderSettings() {
     <h3>データの控え</h3>
     <div class="row"><button id="stExport">控えを作る</button><button id="stImport">控えから戻す</button></div>
     <h3>この地図について</h3>
-    <p class="small muted">地図：国土地理院。道路データ：© OpenStreetMap contributors（ODbL）。住所データ：Geolonia 住所データ（CC BY 4.0、国土交通省 位置参照情報をもとに作成）。地図表示：Leaflet。<br>道路データは実際の通行規制と違うことがあります。必ず実際の道路標識に従ってください。</p>`;
+    <p class="small muted">地図：国土地理院。道路データ：© OpenStreetMap contributors（ODbL）。住所データ：Geolonia 住所データ（CC BY 4.0、国土交通省 位置参照情報をもとに作成）。地番：法務省 登記所備付地図データ（G空間情報センター）を加工して作成。地図表示：Leaflet。<br>道路データは実際の通行規制と違うことがあります。必ず実際の道路標識に従ってください。</p>`;
   $('stUpdate').onclick = checkUpdate;
   $('stForce').onclick = forceReload;
   $('stPale').onclick = () => { st.mapSource = BASE_MAP; save(); setBaseLayer(); renderSettings(); };
@@ -1510,6 +1621,7 @@ async function boot() {
   if (!plan() && S.plans[0]) S.planId = S.plans[0].id;
   setBaseLayer();
   await loadAddr();
+  loadChiban();
   renderPlan(); renderStops(); renderHazards(); renderDrawings();
   const p = plan();
   if (p && p.stops.length) map.fitBounds(L.latLngBounds(p.stops.map((s) => [s.lat, s.lng])), { padding: [30, 30], maxZoom: 16 });

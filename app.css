@@ -231,3 +231,8 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 .ba-ctl select, .ba-ctl input { font-size: 16px; padding: 8px; }
 .ba-yen { display: flex; align-items: center; gap: 4px; }
 .ba-yen input { flex: 1; min-width: 0; }
+
+.cb-list { border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.cb-row { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 15px; }
+.cb-row:last-child { border-bottom: none; }
+.cb-row span { color: var(--muted); }
