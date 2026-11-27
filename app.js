@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第22版（2026年11月27日）';
+const APP_VERSION = '第23版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -457,7 +457,8 @@ function renderStops() {
   const line = [];
   p.stops.forEach((s, i) => {
     const cls = s.status === 'todo' && i === nextIdx ? 'next' : (s.status === 'todo' ? '' : s.status);
-    const m = L.marker([s.lat, s.lng], { draggable: !S.nav, autoPan: true, icon: L.divIcon({ className: '', html: `<div class="pin ${cls} ${s.kind === 'pickup' ? 'pickup' : ''}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}${s.temp ? `<div class="tempb">${s.temp === 'frozen' ? '❄️' : '🧊'}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
+    const faint = s.status === 'done';
+    const m = L.marker([s.lat, s.lng], { draggable: !S.nav, autoPan: true, zIndexOffset: faint ? -500 : 0, icon: faint ? L.divIcon({ className: '', html: `<div class="fpin done"></div><div class="flbl">${esc(s.name || (s.address || '').replace(HOME_AREA.city + HOME_AREA.town, ''))}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }) : L.divIcon({ className: '', html: `<div class="pin ${cls} ${s.kind === 'pickup' ? 'pickup' : ''}"><span>${i + 1}</span></div>${s.slot ? `<div class="slotb">${slotOf(s.slot).short}</div>` : ''}${s.temp ? `<div class="tempb">${s.temp === 'frozen' ? '❄️' : '🧊'}</div>` : ''}`, iconSize: [32, 32], iconAnchor: [4, 34] }) });
     m.on('click', () => { if (S.nav) { if (s.status !== 'done' && S.nav.idx !== i) { S.nav.idx = i; if (s.status !== 'todo') s.status = 'todo'; save(); renderStops(); toast(`「${stopLabel(s)}」を次の配達先にしました`); routeToCurrent(false); } return; } S.expanded = s.id; showTab('plan'); renderPlan(); $('sheet').classList.remove('collapsed'); const el = document.querySelector(`[data-sid="${s.id}"]`); if (el) el.scrollIntoView({ block: 'center' }); });
     m.on('dragstart', () => { m._from = { lat: s.lat, lng: s.lng, approx: s.approx }; });
     m.on('dragend', () => {
