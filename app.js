@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第16版（2026年11月27日）';
+const APP_VERSION = '第17版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -1002,6 +1002,30 @@ function batchAddDialog() {
   });
 }
 
+/* ---------- 検索した場所を地図に出す（下のパネルに隠れないように） ---------- */
+let searchPin = null;
+function focusVisible(lat, lng, zoom) {
+  const sh = $('sheet'), hidden = sh.classList.contains('hidden');
+  const cover = hidden ? 0 : sh.getBoundingClientRect().height;
+  map.setView([lat, lng], zoom, { animate: false });
+  if (cover > 0) map.panBy([0, cover / 2], { animate: false });
+}
+function clearSearchPin() { if (searchPin) { map.removeLayer(searchPin); searchPin = null; } }
+function showSearchPin(r, onAdd) {
+  clearSearchPin();
+  $('sheet').classList.add('collapsed');
+  setTimeout(() => {
+    map.invalidateSize();
+    focusVisible(r.lat, r.lng, r.approx ? 16 : 18);
+    searchPin = L.marker([r.lat, r.lng], { icon: L.divIcon({ className: 'search-pin', html: '<div class="sp-dot"></div>', iconSize: [30, 30], iconAnchor: [15, 15] }), zIndexOffset: 2000 }).addTo(map);
+    const box = document.createElement('div'); box.className = 'sp-pop';
+    box.innerHTML = `<b>${esc(r.label)}</b>${r.approx ? '<div class="small muted">地名の中心です（番地の位置ではありません）</div>' : ''}<div class="sp-btns"><button class="sp-no">閉じる</button><button class="sp-add primary">ここに追加</button></div>`;
+    box.querySelector('.sp-no').onclick = () => clearSearchPin();
+    box.querySelector('.sp-add').onclick = () => { clearSearchPin(); onAdd(); };
+    searchPin.bindPopup(box, { closeButton: false, autoPan: false, offset: [0, -10] }).openPopup();
+  }, 250);
+}
+
 /* ---------- 地点を追加 ---------- */
 function renderAdd() {
   const towns = ADDR.filter((a) => a.city === HOME_AREA.city && a.group === HOME_AREA.town);
@@ -1054,7 +1078,7 @@ function renderAdd() {
     $('aRes').innerHTML = list.length ? list.map((r, i) => `<div class="result" data-i="${i}"><span class="src ${r.src === 'off' ? 'off' : ''}">${r.src === 'off' ? '町名' : '住所'}</span>${esc(r.label)}</div>`).join('')
       : '<p class="muted">見つかりませんでした。「地図をタップして追加」もお使いください。</p>';
     $('aRes').querySelectorAll('.result').forEach((d) => {
-      d.onclick = () => { const r = list[+d.dataset.i]; map.setView([r.lat, r.lng], 17); newStopDialog({ address: /\d/.test(q) && r.approx ? q : r.label, lat: r.lat, lng: r.lng, approx: r.approx }); };
+      d.onclick = () => { const r = list[+d.dataset.i]; showSearchPin(r, () => newStopDialog({ address: /\d/.test(q) && r.approx ? q : r.label, lat: r.lat, lng: r.lng, approx: r.approx })); };
     });
   };
   $('aGo').onclick = go;
