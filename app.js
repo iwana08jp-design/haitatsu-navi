@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第13版（2026年11月23日）';
+const APP_VERSION = '第14版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -56,7 +56,7 @@ const HAZARD_TYPES = { ice: { icon: '❄️', name: '凍結注意' }, chain: { i
 
 /* ---------- 状態 ---------- */
 const S = {
-  settings: { v: 2, mapSource: 'gsi_std', area: Object.assign({}, PRESET_AREAS.shinko), maxZoom: 17, speech: true, voiceInput: true, lastTown: '',
+  settings: { v: 3, mapSource: 'gsi_pale', area: Object.assign({}, PRESET_AREAS.shinko), maxZoom: 17, photoZoom: 17, speech: true, voiceInput: true, lastTown: '',
     startMode: 'gps', home: null, endMode: 'open', autoCache: true },
   plans: [], planId: null, hazards: [], favorites: [], drawings: [],
   graphMeta: null, pos: null, nav: null, expanded: null, pick: null
@@ -225,9 +225,20 @@ const OfflineLayer = L.GridLayer.extend({
     return tile;
   }
 });
+const BASE_MAP = 'gsi_pale', PHOTO_MAP = 'gsi_photo';
+function updatePhotoButtons(src) {
+  const photo = src === PHOTO_MAP;
+  ['btnPhoto', 'nvPhoto'].forEach((id) => { const b = $(id); if (b) { b.textContent = photo ? '🗺 地図' : '📷 写真'; b.classList.toggle('on', photo); } });
+}
+function togglePhoto() {
+  S.settings.mapSource = S.settings.mapSource === PHOTO_MAP ? BASE_MAP : PHOTO_MAP;
+  save(); setBaseLayer();
+  if ($('pane-settings') && !$('pane-settings').classList.contains('hidden')) renderSettings();
+}
 function setBaseLayer() {
   if (baseLayer) map.removeLayer(baseLayer);
-  const src = MAP_SOURCES[S.settings.mapSource] ? S.settings.mapSource : 'gsi_std';
+  const src = MAP_SOURCES[S.settings.mapSource] ? S.settings.mapSource : 'gsi_pale';
+  updatePhotoButtons(src);
   baseLayer = new OfflineLayer({ src, maxZoom: 19, attribution: MAP_SOURCES[src].attr + ' | 道路 © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>', keepBuffer: 3 });
   baseLayer.addTo(map);
 }
@@ -1165,23 +1176,25 @@ async function downloadTiles() {
   if (dl) { dl.stop = true; return; }
   if (!navigator.onLine) return toast('インターネットにつないでから行ってください');
   try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) { /* なし */ }
-  const src = S.settings.mapSource, area = S.settings.area, maxZ = S.settings.maxZoom;
+  const area = S.settings.area;
   dl = { stop: false, done: 0, total: 0, fail: 0 };
   $('dlTiles').textContent = '中断する';
   const queue = [];
-  for (let z = 8; z <= maxZ; z++) {
-    const t = tilesFor(area, z);
-    const have = new Set(await DB.keys('tiles', DB.prefix(`${src}/${z}/`)));
-    for (let x = t.x0; x <= t.x1; x++) for (let y = t.y0; y <= t.y1; y++) { dl.total++; const k = tileKey(src, z, x, y); if (have.has(k)) dl.done++; else queue.push([z, x, y]); }
+  for (const [src, maxZ] of [[BASE_MAP, S.settings.maxZoom], [PHOTO_MAP, S.settings.photoZoom || 17]]) {
+    for (let z = 8; z <= maxZ; z++) {
+      const t = tilesFor(area, z);
+      const have = new Set(await DB.keys('tiles', DB.prefix(`${src}/${z}/`)));
+      for (let x = t.x0; x <= t.x1; x++) for (let y = t.y0; y <= t.y1; y++) { dl.total++; const k = tileKey(src, z, x, y); if (have.has(k)) dl.done++; else queue.push([src, z, x, y]); }
+    }
   }
   const batch = [];
   const flush = async () => { if (batch.length) { const b = batch.splice(0); await DB.putMany('tiles', b); } };
-  const show = () => { $('dlBar').style.width = (dl.done / dl.total * 100) + '%'; $('dlMsg').textContent = `${dl.done} / ${dl.total} 枚${dl.fail ? `（失敗 ${dl.fail}）` : ''}`; };
+  const show = () => { $('dlBar').style.width = (dl.done / dl.total * 100) + '%'; $('dlMsg').textContent = `${dl.done.toLocaleString()} / ${dl.total.toLocaleString()} 枚（地図と航空写真）${dl.fail ? `（失敗 ${dl.fail}）` : ''}`; };
   show();
   let qi = 0;
   const workerFn = async () => {
     while (qi < queue.length && !dl.stop) {
-      const [z, x, y] = queue[qi++];
+      const [src, z, x, y] = queue[qi++];
       try {
         const r = await fetchTimeout(tileUrl(src, z, x, y), 15000);
         if (r.ok) { batch.push([tileKey(src, z, x, y), await r.blob()]); if (batch.length >= 25) await flush(); }
@@ -1193,8 +1206,8 @@ async function downloadTiles() {
   await Promise.all([0, 1, 2, 3, 4].map(workerFn));
   await flush(); show();
   const stopped = dl.stop; dl = null;
-  $('dlTiles').textContent = '地図をダウンロード';
-  toast(stopped ? 'ダウンロードを中断しました（続きから再開できます）' : '地図のダウンロードが終わりました', 4000);
+  $('dlTiles').textContent = '地図と航空写真をダウンロード';
+  toast(stopped ? 'ダウンロードを中断しました（続きから再開できます）' : '地図と航空写真のダウンロードが終わりました', 4000);
   renderSettings();
 }
 async function buildRoads() {
@@ -1217,7 +1230,7 @@ async function buildRoads() {
 }
 async function renderSettings() {
   const st = S.settings, a = st.area;
-  const nz = (z) => countTiles(a, z), zopt = (z, label) => `<option value="${z}" ${st.maxZoom === z ? 'selected' : ''}>${label}（約${nz(z).toLocaleString()}枚・約${Math.round(nz(z) * 0.018)}MB）</option>`;
+  const nz = (z) => countTiles(a, z), zopt = (z, label, cur, mb) => `<option value="${z}" ${cur === z ? 'selected' : ''}>${label}（約${nz(z).toLocaleString()}枚・約${Math.round(nz(z) * mb)}MB）</option>`;
   let tileCount = '…', usage = '';
   const el = $('pane-settings');
   el.innerHTML = `
@@ -1226,15 +1239,18 @@ async function renderSettings() {
     <button id="stForce" style="width:100%;margin-top:6px;font-size:15px">うまく更新されないとき（読み込み直す）</button>
     <p class="small muted" style="margin:4px 0 0">どちらも、配達先・よく使う住所・地図・道路データは消えません。</p>
     <h3>地図の種類</h3>
-    <select id="stSrc">${Object.entries(MAP_SOURCES).map(([k, v]) => `<option value="${k}" ${k === st.mapSource ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}<option disabled>ゼンリン地図（契約後に追加）</option></select>
+    <p class="small muted">ふだんは見やすい「淡色地図」。地図の右上の「📷 写真」で、航空写真とすぐ切り替えられます。</p>
+    <div class="btngrid"><button id="stPale" class="${st.mapSource === BASE_MAP ? 'primary' : ''}">🗺 淡色地図</button><button id="stPhoto" class="${st.mapSource === PHOTO_MAP ? 'primary' : ''}">📷 航空写真</button></div>
     <h3>オフライン準備</h3>
     <p class="small muted">家のWi-Fiなど、つながる所で一度行えば、電波がなくても地図とルート案内が使えます。</p>
     <div class="status-line">範囲：<b id="stArea">${esc(a.name || '指定した範囲')}</b></div>
     <div class="btngrid"><button id="stAreaShinko">信更町とその周辺</button><button id="stAreaPreset">長野市とその周辺</button><button id="stAreaView" style="grid-column:1/-1">今見ている範囲にする</button></div>
-    <label>地図の細かさ（どこまで拡大して見られるか）</label>
-    <select id="stZoom">${zopt(15, 'ふつう')}${zopt(16, '細かい')}${zopt(17, 'とても細かい（家の形まで）')}</select>
-    <div class="status-line" style="margin-top:10px">① 地図：保存済み <b id="stTiles">${tileCount}</b> 枚</div>
-    <button id="dlTiles" class="primary" style="width:100%">地図をダウンロード</button>
+    <label>淡色地図の細かさ</label>
+    <select id="stZoom">${zopt(15, 'ふつう', st.maxZoom, 0.012)}${zopt(16, '細かい', st.maxZoom, 0.012)}${zopt(17, 'とても細かい（家の形まで）', st.maxZoom, 0.012)}</select>
+    <label>航空写真の細かさ</label>
+    <select id="stPZoom">${zopt(16, 'ふつう', st.photoZoom, 0.035)}${zopt(17, '細かい（屋根が分かる）', st.photoZoom, 0.035)}${zopt(18, 'とても細かい（容量が大きい）', st.photoZoom, 0.035)}</select>
+    <div class="status-line" style="margin-top:10px">① 保存済み：淡色地図 <b id="stTiles">…</b> 枚／航空写真 <b id="stPTiles">…</b> 枚</div>
+    <button id="dlTiles" class="primary" style="width:100%">地図と航空写真をダウンロード</button>
     <div class="progress"><div id="dlBar"></div></div><div id="dlMsg" class="small muted"></div>
     <div class="status-line" style="margin-top:10px">② 道路データ（ルート計算用）：<b>${S.graphMeta ? new Date(S.graphMeta.created).toLocaleDateString('ja-JP') + ' 作成（' + S.graphMeta.nSeg.toLocaleString() + '区間）' : 'まだありません'}</b></div>
     <button id="rdBuild" class="primary" style="width:100%">${S.graphMeta ? '道路データを作り直す' : '道路データを作る'}</button>
@@ -1259,7 +1275,9 @@ async function renderSettings() {
     <p class="small muted">地図：国土地理院。道路データ：© OpenStreetMap contributors（ODbL）。住所データ：Geolonia 住所データ（CC BY 4.0、国土交通省 位置参照情報をもとに作成）。地図表示：Leaflet。<br>道路データは実際の通行規制と違うことがあります。必ず実際の道路標識に従ってください。</p>`;
   $('stUpdate').onclick = checkUpdate;
   $('stForce').onclick = forceReload;
-  $('stSrc').onchange = (e) => { st.mapSource = e.target.value; save(); setBaseLayer(); renderSettings(); };
+  $('stPale').onclick = () => { st.mapSource = BASE_MAP; save(); setBaseLayer(); renderSettings(); };
+  $('stPhoto').onclick = () => { st.mapSource = PHOTO_MAP; save(); setBaseLayer(); renderSettings(); };
+  $('stPZoom').onchange = (e) => { st.photoZoom = +e.target.value; save(); };
   $('stAreaView').onclick = () => { const b = map.getBounds(); st.area = { name: '指定した範囲', s: +b.getSouth().toFixed(4), w: +b.getWest().toFixed(4), n: +b.getNorth().toFixed(4), e: +b.getEast().toFixed(4) }; save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
   $('stAreaPreset').onclick = () => { st.area = Object.assign({}, PRESET_AREAS.nagano); save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
   $('stAreaShinko').onclick = () => { st.area = Object.assign({}, PRESET_AREAS.shinko); save(); renderSettings(); toast('範囲を変えました。道路データも作り直してください'); };
@@ -1276,7 +1294,8 @@ async function renderSettings() {
   $('stDemo').onclick = () => { const p = plan(); if (!p || nextStopIndex(p) < 0) return toast('先に配達先を登録してください'); startNav(true); };
   $('stExport').onclick = exportDialog;
   $('stImport').onclick = importDialog;
-  DB.count('tiles', DB.prefix(st.mapSource + '/')).then((c) => { const t = $('stTiles'); if (t) t.textContent = c.toLocaleString(); });
+  DB.count('tiles', DB.prefix(BASE_MAP + '/')).then((c) => { const t = $('stTiles'); if (t) t.textContent = c.toLocaleString(); });
+  DB.count('tiles', DB.prefix(PHOTO_MAP + '/')).then((c) => { const t = $('stPTiles'); if (t) t.textContent = c.toLocaleString(); });
   if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then((e) => { const u = $('stUsage'); if (u) u.innerHTML = `端末の使用量：<b>${Math.round(e.usage / 1048576)}MB</b>（使える目安 ${Math.round(e.quota / 1048576).toLocaleString()}MB）`; });
 }
 /* ---------- アップデート ---------- */
@@ -1355,9 +1374,9 @@ function showTab(name) {
 function renderAll() { renderPlan(); renderStops(); renderHazards(); renderDrawings(); setBaseLayer(); }
 
 function layersDialog() {
-  openModal(`<h2>地図の種類</h2>${Object.entries(MAP_SOURCES).map(([k, v]) => `<button data-src="${k}" class="${k === S.settings.mapSource ? 'primary' : ''}" style="width:100%;margin:4px 0">${esc(v.name)}</button>`).join('')}
+  openModal(`<h2>地図の種類</h2>${[[BASE_MAP, MAP_SOURCES[BASE_MAP]], [PHOTO_MAP, MAP_SOURCES[PHOTO_MAP]], ['gsi_std', MAP_SOURCES.gsi_std]].map(([k, v]) => `<button data-src="${k}" class="${k === S.settings.mapSource ? 'primary' : ''}" style="width:100%;margin:4px 0">${esc(v.name)}</button>`).join('')}
     <button disabled style="width:100%;margin:4px 0">ゼンリン地図（契約後に追加）</button>
-    <button id="lyDraw" style="width:100%;margin:8px 0 4px">${S.settings.showDrawings === false ? '✏️ 手書きを表示する' : '✏️ 手書きを隠す'}</button><p class="small muted">オフラインで使えるのは、ダウンロードした種類の地図です。</p>
+    <button id="lyDraw" style="width:100%;margin:8px 0 4px">${S.settings.showDrawings === false ? '✏️ 手書きを表示する' : '✏️ 手書きを隠す'}</button><p class="small muted">オフラインで使えるのは、ダウンロードした淡色地図と航空写真です（標準地図は見た分だけ）。</p>
     <div class="modal-btns"><button id="lyNo">閉じる</button></div>`, (box) => {
     $('lyNo').onclick = closeModal;
     $('lyDraw').onclick = () => { S.settings.showDrawings = S.settings.showDrawings === false; save(); renderDrawings(); closeModal(); };
@@ -1372,7 +1391,8 @@ async function boot() {
   try {
     const st = await DB.get('kv', 'state');
     if (st) { Object.assign(S.settings, st.settings || {}); S.plans = st.plans || []; S.planId = st.planId; S.hazards = st.hazards || []; S.favorites = st.favorites || []; S.drawings = st.drawings || [];
-      if (!st.settings || !st.settings.v) { S.settings.v = 2; S.settings.area = Object.assign({}, PRESET_AREAS.shinko); S.settings.maxZoom = 17; if (S.settings.voiceInput === undefined) S.settings.voiceInput = true; } }
+      if (!st.settings || !st.settings.v) { S.settings.v = 2; S.settings.area = Object.assign({}, PRESET_AREAS.shinko); S.settings.maxZoom = 17; if (S.settings.voiceInput === undefined) S.settings.voiceInput = true; }
+      if (S.settings.v < 3) { S.settings.v = 3; if (S.settings.mapSource === 'gsi_std') S.settings.mapSource = BASE_MAP; if (!S.settings.photoZoom) S.settings.photoZoom = 17; } }
   } catch (e) { toast('この端末ではデータを保存できないようです'); }
   if (!plan() && S.plans[0]) S.planId = S.plans[0].id;
   setBaseLayer();
@@ -1388,6 +1408,9 @@ async function boot() {
   $('btnLocate').onclick = () => { S.locateOnce = true; startGeo(); if (S.pos) onPosition(S.pos); };
   $('btnLayers').onclick = layersDialog;
   $('btnDraw').onclick = startDraw;
+  $('btnPhoto').onclick = togglePhoto;
+  $('nvPhoto').onclick = togglePhoto;
+  updatePhotoButtons(S.settings.mapSource);
   $('pickCancel').onclick = endPick;
   $('btnFollow').onclick = () => { if (!S.nav) return; if (S.nav.nonav) { if (S.pos) map.setView([S.pos.lat, S.pos.lng], Math.max(map.getZoom(), 16)); $('btnFollow').classList.add('hidden'); return; } S.nav.follow = true; $('btnFollow').classList.add('hidden'); updateNav(); };
   $('nvDone').onclick = () => navDone('done');
