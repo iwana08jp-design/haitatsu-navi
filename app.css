@@ -247,3 +247,6 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 .sp-pop { min-width: 200px; font-size: 15px; }
 .sp-btns { display: flex; gap: 8px; margin-top: 8px; }
 .sp-btns button { flex: 1; padding: 8px 6px; }
+
+.snap-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.snap-row button { flex: 0 0 auto; }

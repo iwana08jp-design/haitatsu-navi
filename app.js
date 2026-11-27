@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第18版（2026年11月27日）';
+const APP_VERSION = '第19版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -70,7 +70,81 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards, favorites: S.favorites, drawings: S.drawings }).catch((e) => toast('保存できませんでした：' + e.message));
+    autoSnapshot();
   }, 300);
+}
+/* ---------- 毎日の控え（端末の中に自動で14日分） ---------- */
+const SNAP_DAYS = 14;
+function dayStr(d) { d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function backupData() { return { app: 'haitatsu-navi', v: 1, at: new Date().toISOString(), plans: S.plans, hazards: S.hazards, favorites: S.favorites, drawings: S.drawings, settings: S.settings }; }
+let snapPruned = false;
+async function autoSnapshot() {
+  if (!S.favorites.length && !S.plans.some((p) => p.stops.length)) return; // 空のときは控えを作らない
+  try {
+    await DB.put('kv', 'snap/' + dayStr(), backupData());
+    if (!snapPruned) { snapPruned = true; const ks = (await DB.keys('kv', DB.prefix('snap/'))).sort(); for (const k of ks.slice(0, Math.max(0, ks.length - SNAP_DAYS))) await DB.del('kv', k); }
+  } catch (e) { /* 控えが作れなくても本体の保存は続ける */ }
+}
+function applyBackup(d, msg) {
+  if (!d || d.app !== 'haitatsu-navi') throw new Error('形式が違います');
+  const prev = JSON.parse(JSON.stringify(backupData()));
+  if (msg) setTimeout(() => undoToast(msg, () => applyBackup(prev)), 50);
+  S.plans = d.plans || []; S.hazards = d.hazards || []; S.favorites = d.favorites || []; S.drawings = d.drawings || []; if (d.settings) Object.assign(S.settings, d.settings);
+  S.planId = S.plans[0] ? S.plans[0].id : null; save(); renderAll();
+}
+async function snapshotsDialog() {
+  const ks = (await DB.keys('kv', DB.prefix('snap/'))).sort().reverse();
+  const rows = [];
+  for (const k of ks) { const d = await DB.get('kv', k); rows.push({ k, day: k.slice(5), fav: (d.favorites || []).length, stops: (d.plans || []).reduce((a, p) => a + p.stops.length, 0), at: d.at }); }
+  openModal(`<h2>毎日の控え（自動）</h2><p class="small muted">その日の最後の状態を、端末の中に${SNAP_DAYS}日分とってあります。間違えて消したときは、戻したい日を押してください。</p>
+    ${rows.length ? rows.map((r) => `<div class="snap-row"><div><b>${r.day.replace(/^(\d+)-(\d+)-(\d+)$/, (m, y, mo, d) => `${+mo}月${+d}日`)}</b>${r.k === 'snap/' + dayStr() ? '（今日）' : ''}<div class="small muted">よく配達する家 ${r.fav}軒・配達先 ${r.stops}件</div></div><button data-snap="${r.k}">この日に戻す</button></div>`).join('') : '<p class="muted">まだ控えがありません。家を登録すると、自動で作られます。</p>'}
+    <div class="modal-btns"><button id="snNo">閉じる</button></div>`, (box) => {
+    $('snNo').onclick = closeModal;
+    box.querySelectorAll('[data-snap]').forEach((b) => {
+      b.onclick = async () => {
+        if (!(await ask(`${b.closest('.snap-row').querySelector('b').textContent}の状態に戻しますか？今の内容は置き換わります。`, '戻す', true))) return;
+        try { closeModal(); applyBackup(await DB.get('kv', b.dataset.snap), '控えの日の状態に戻しました'); } catch (e) { toast('戻せませんでした：' + e.message); }
+      };
+    });
+  });
+}
+/* ---------- 控えをファイルに保存（iCloud Drive など） ---------- */
+async function saveBackupFile() {
+  const name = `haitatsu-navi-${dayStr()}.json`;
+  const blob = new Blob([JSON.stringify(backupData())], { type: 'application/json' });
+  const file = new File([blob], name, { type: 'application/json' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: '配達ナビの控え' });
+      S.settings.lastFileBackup = dayStr(); save(); return true;
+    }
+  } catch (e) { if (e && e.name === 'AbortError') return false; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  S.settings.lastFileBackup = dayStr(); save(); return true;
+}
+function restoreFileDialog() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return;
+    try {
+      const d = JSON.parse(await f.text());
+      const n = (d.favorites || []).length;
+      if (!(await ask(`「${f.name}」から戻しますか？（よく配達する家 ${n}軒）今の内容は置き換わります。`, '戻す', true))) return;
+      applyBackup(d, 'ファイルから戻しました');
+    } catch (e) { toast('戻せませんでした：' + e.message); }
+  };
+  inp.click();
+}
+/* 配達が終わったら、その日1回だけ「ファイルに保存」をすすめる */
+function offerDailyFileBackup() {
+  if (S.settings.dailyFileBackup === false || S.settings.lastFileBackup === dayStr() || !S.favorites.length) return;
+  openModal(`<h2>今日の控えを保存しますか？</h2><p>お疲れさまでした。控えをファイルにしておくと、iPhoneを替えたときやデータが消えたときに戻せます。</p>
+    <p class="small muted">次の画面で「<b>"ファイル"に保存</b>」→「<b>iCloud Drive</b>」を選んでください。同じ名前のファイルは上書きしてかまいません。</p>
+    <div class="modal-btns"><button id="dfNo">今日はしない</button><button id="dfOk" class="primary">保存する</button></div>`, () => {
+    $('dfNo').onclick = () => { S.settings.lastFileBackup = dayStr(); save(); closeModal(); };
+    $('dfOk').onclick = async () => { const ok = await saveBackupFile(); closeModal(); if (ok) toast('控えを保存しました'); };
+  });
 }
 
 /* ---------- 小物 ---------- */
@@ -1234,6 +1308,8 @@ function endNav() {
   $('sheet').classList.remove('hidden'); $('hud').classList.remove('hidden');
   $('navBanner').classList.add('hidden'); $('navBar').classList.add('hidden'); $('btnFollow').classList.add('hidden');
   renderPlan(); renderStops();
+  const p = plan();
+  if (p && p.stops.length && p.stops.every((x) => x.status && x.status !== 'todo')) setTimeout(offerDailyFileBackup, 1200);
 }
 async function routeToCurrent(first) {
   const nav = S.nav, p = plan(); if (!nav) return;
@@ -1518,7 +1594,11 @@ async function renderSettings() {
     <h3>動作確認</h3>
     <button id="stDemo" style="width:100%">デモ走行（GPSなしでナビを試す）</button>
     <h3>データの控え</h3>
-    <div class="row"><button id="stExport">控えを作る</button><button id="stImport">控えから戻す</button></div>
+    <p class="small muted">端末の中に、毎日自動で${SNAP_DAYS}日分の控えをとっています。端末が壊れたときのために、ときどき「ファイルに保存」もしてください。${st.lastFileBackup ? `（最後にファイルに保存した日：${st.lastFileBackup}）` : ''}</p>
+    <div class="row"><button id="stSnap">毎日の控えから戻す</button></div>
+    <div class="row"><button id="stFile" class="primary">ファイルに保存</button><button id="stFileIn">ファイルから戻す</button></div>
+    <label style="display:flex;gap:10px;align-items:center;margin:6px 0"><input type="checkbox" id="stDaily" style="width:24px;height:24px" ${st.dailyFileBackup !== false ? 'checked' : ''}> 配達が全部終わったら、ファイルに保存するかたずねる</label>
+    <div class="row"><button id="stExport">文字で控えを作る</button><button id="stImport">文字の控えから戻す</button></div>
     <h3>この地図について</h3>
     <p class="small muted">地図：国土地理院。道路データ：© OpenStreetMap contributors（ODbL）。住所データ：Geolonia 住所データ（CC BY 4.0、国土交通省 位置参照情報をもとに作成）。地番：法務省 登記所備付地図データ（G空間情報センター）を加工して作成。地図表示：Leaflet。<br>道路データは実際の通行規制と違うことがあります。必ず実際の道路標識に従ってください。</p>`;
   $('stUpdate').onclick = checkUpdate;
@@ -1540,6 +1620,10 @@ async function renderSettings() {
   $('stVoiceTest').onclick = () => speak('300メートル先、右折です', true);
   $('stHz').onclick = () => startPick('注意地点をタップしてください', hazardDialog);
   $('stDemo').onclick = () => { const p = plan(); if (!p || nextStopIndex(p) < 0) return toast('先に配達先を登録してください'); startNav(true); };
+  $('stSnap').onclick = snapshotsDialog;
+  $('stFile').onclick = async () => { if (await saveBackupFile()) { toast('控えを保存しました'); renderSettings(); } };
+  $('stFileIn').onclick = restoreFileDialog;
+  $('stDaily').onchange = (e) => { st.dailyFileBackup = e.target.checked; save(); };
   $('stExport').onclick = exportDialog;
   $('stImport').onclick = importDialog;
   DB.count('tiles', DB.prefix(BASE_MAP + '/')).then((c) => { const t = $('stTiles'); if (t) t.textContent = c.toLocaleString(); });
@@ -1601,10 +1685,7 @@ function importDialog() {
     $('imNo').onclick = closeModal;
     $('imOk').onclick = () => {
       try {
-        const d = JSON.parse($('imTxt').value);
-        if (d.app !== 'haitatsu-navi') throw new Error('形式が違います');
-        S.plans = d.plans || []; S.hazards = d.hazards || []; S.favorites = d.favorites || []; S.drawings = d.drawings || []; if (d.settings) Object.assign(S.settings, d.settings);
-        S.planId = S.plans[0] ? S.plans[0].id : null; save(); closeModal(); renderAll(); toast('戻しました');
+        applyBackup(JSON.parse($('imTxt').value), '戻しました'); closeModal();
       } catch (e) { toast('戻せませんでした：' + e.message); }
     };
   });
@@ -1646,6 +1727,7 @@ async function boot() {
   setBaseLayer();
   await loadAddr();
   loadChiban();
+  autoSnapshot();
   renderPlan(); renderStops(); renderHazards(); renderDrawings();
   const p = plan();
   if (p && p.stops.length) map.fitBounds(L.latLngBounds(p.stops.map((s) => [s.lat, s.lng])), { padding: [30, 30], maxZoom: 16 });
