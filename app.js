@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第17版（2026年11月27日）';
+const APP_VERSION = '第18版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -920,10 +920,10 @@ function favGroupsHtml(filter) {
     const nSel = fs.filter((f) => FS.sel.has(f.id)).length, nIn = fs.filter(inTodayPlan).length;
     return `<div class="aza">
       <button class="aza-h ${isOpen ? 'open' : ''}" data-aza="${esc(a)}"><span>${isOpen ? '▼' : '▶'} ${esc(a)}</span><em>${fs.length}軒${nIn ? `・追加済み ${nIn}` : ''}${nSel ? `・<b>選択 ${nSel}</b>` : ''}</em></button>
-      ${isOpen ? `<div class="aza-b">${fs.map((f) => { const added = inTodayPlan(f), on = FS.sel.has(f.id); return `<div class="fsel ${on ? 'on' : ''} ${added ? 'added' : ''}" data-fs="${f.id}">
+      ${isOpen ? `<div class="aza-b">${(() => { const can = fs.filter((f) => !inTodayPlan(f)); const nOn = can.filter((f) => FS.sel.has(f.id)).length; const st = can.length && nOn === can.length ? 'on' : nOn ? 'part' : ''; return can.length ? `<div class="fsel fall ${st}" data-azall="${esc(a)}"><span class="ck">${st === 'on' ? '✓' : st === 'part' ? '－' : ''}</span><div class="body"><div class="name">全部選択</div><div class="addr">${nOn ? `${nOn}軒を選んでいます（外したい家だけ押してください）` : `${can.length}軒をまとめて選びます`}</div></div></div>` : ''; })()}${fs.map((f) => { const added = inTodayPlan(f), on = FS.sel.has(f.id); return `<div class="fsel ${on ? 'on' : ''} ${added ? 'added' : ''}" data-fs="${f.id}">
           <span class="ck">${added ? '済' : on ? '✓' : ''}</span>
           <div class="body"><div class="name">${esc(f.name || f.address)}</div>${f.name ? `<div class="addr">${esc((f.address || '').replace(HOME_AREA.city + HOME_AREA.town, ''))}</div>` : ''}<div class="tags">${stopTags(f)}</div></div></div>`; }).join('')}
-        <button class="aza-all" data-azall="${esc(a)}">この字を全部選ぶ</button></div>` : ''}
+</div>` : ''}
     </div>`;
   }).join('');
   return html || '<p class="muted">見つかりません</p>';
