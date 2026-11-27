@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第21版（2026年11月27日）';
+const APP_VERSION = '第22版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -71,6 +71,7 @@ function save() {
   saveTimer = setTimeout(() => {
     DB.put('kv', 'state', { settings: S.settings, plans: S.plans, planId: S.planId, hazards: S.hazards, favorites: S.favorites, drawings: S.drawings }).catch((e) => toast('保存できませんでした：' + e.message));
     autoSnapshot();
+    if (typeof renderFavs === 'function') renderFavs();
   }, 300);
 }
 /* ---------- 毎日の控え（端末の中に自動で14日分） ---------- */
@@ -258,7 +259,7 @@ async function fetchTimeout(url, ms, opt) {
 }
 
 /* ---------- 地図 ---------- */
-let map, baseLayer, meMarker, stopLayer, hazardLayer, routeLine, orderLine;
+let map, baseLayer, meMarker, stopLayer, hazardLayer, favLayer, routeLine, orderLine;
 const tileKey = (src, z, x, y) => `${src}/${z}/${x}/${y}`;
 function tileUrl(src, z, x, y) { return MAP_SOURCES[src].url.replace('{z}', z).replace('{x}', x).replace('{y}', y); }
 
@@ -321,8 +322,12 @@ function setBaseLayer() {
 function initMap() {
   map = L.map('map', { zoomControl: false, maxZoom: 19, minZoom: 6 }).setView([36.6486, 138.1948], 13);
   setBaseLayer();
+  map.createPane('favPane'); map.getPane('favPane').style.zIndex = 590;
+  favLayer = L.layerGroup().addTo(map);
   stopLayer = L.layerGroup().addTo(map);
   hazardLayer = L.layerGroup().addTo(map);
+  const zcls = () => map.getContainer().classList.toggle('zoom-lo', map.getZoom() < 16);
+  map.on('zoomend', zcls); zcls();
   setupDrawing();
   map.on('click', onMapClick);
   map.on('contextmenu', (e) => mapMenu(e.latlng));
@@ -464,6 +469,27 @@ function renderStops() {
     if (s.status !== 'done') line.push([s.lat, s.lng]);
   });
   if (!S.nav && line.length > 1 && p.estimate) orderLine = L.polyline(line, { color: '#14213d', weight: 3, opacity: .6, dashArray: '6 8' }).addTo(map);
+  renderFavs();
+}
+/* ---------- 登録してある家を地図に薄く出す（押すと内容を直せる） ---------- */
+function renderFavs() {
+  if (!favLayer) return;
+  favLayer.clearLayers();
+  if (S.settings.showFavs === false) return;
+  const p = plan();
+  S.favorites.forEach((f) => {
+    if (f.lat == null) return;
+    if (p && p.stops.some((s) => s.favId === f.id || (s.name === f.name && s.address === f.address))) return; // 今日の配達先は番号の印で出ている
+    const m = L.marker([f.lat, f.lng], { pane: 'favPane', draggable: !S.nav, autoPan: true, icon: L.divIcon({ className: '', html: `<div class="fpin ${f.okihai === 'ng' ? 'ng' : ''}"></div><div class="flbl">${esc(f.name || (f.address || '').replace(HOME_AREA.city + HOME_AREA.town, ''))}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }) });
+    m.on('click', () => favEdit(f, 'map'));
+    m.on('dragstart', () => { m._from = { lat: f.lat, lng: f.lng, posSrc: f.posSrc }; });
+    m.on('dragend', () => {
+      const ll = m.getLatLng(), from = m._from;
+      f.lat = ll.lat; f.lng = ll.lng; f.posSrc = 'user'; save(); renderFavs();
+      undoToast(`「${f.name || f.address}」の位置を動かしました`, () => { Object.assign(f, from); save(); renderFavs(); });
+    });
+    m.addTo(favLayer);
+  });
 }
 function renderHazards() {
   hazardLayer.clearLayers();
@@ -717,12 +743,31 @@ function favManager() {
   openModal(`<h2>よく使う住所（${S.favorites.length}件）</h2><input id="fmQ" placeholder="名前や住所で絞り込み"><div id="fmList"></div>
     <div class="modal-btns"><button id="fmClose">閉じる</button></div>`, () => { $('fmClose').onclick = () => { closeModal(); if (!$('pane-add').classList.contains('hidden')) renderAdd(); }; $('fmQ').oninput = draw; draw(); });
 }
-function favEdit(f) {
-  openModal(`<h2>よく使う住所の編集</h2>${stopFormHtml(f, false).replace(/<label>時間帯<\/label>[\s\S]*?<\/div>/, '').replace(/<label class="collect-row">[\s\S]*?<\/div>/, '')}
-    <div class="modal-btns"><button id="feNo">戻る</button><button id="feOk" class="primary">保存</button></div>`, (box) => {
+function favEdit(f, from) {
+  const onMap = from === 'map';
+  openModal(`<h2>${onMap ? '登録してある家' : 'よく使う住所の編集'}</h2>${stopFormHtml(f, false).replace(/<label>時間帯<\/label>[\s\S]*?<\/div>/, '').replace(/<label class="collect-row">[\s\S]*?<\/div>/, '')}
+    ${onMap ? `<p class="small muted">位置を直すときは、地図の薄い印を指で押さえたまま動かしてください。</p>
+    <div class="btngrid"><button id="feAdd" class="ok">今日の配達に追加</button><button id="feDel" class="danger">この家を削除</button></div>` : ''}
+    <div class="modal-btns"><button id="feNo">${onMap ? '閉じる' : '戻る'}</button><button id="feOk" class="primary">保存</button></div>`, (box) => {
     bindStopForm(box);
-    $('feNo').onclick = favManager;
-    $('feOk').onclick = () => { const v = readStopForm(); if (!v) return; Object.assign(f, { kind: v.kind, temp: v.temp, okihai: v.okihai, name: v.name, address: v.address, memo: v.memo }); save(); toast('保存しました'); favManager(); };
+    $('feNo').onclick = onMap ? closeModal : favManager;
+    const apply = () => { const v = readStopForm(); if (!v) return false; Object.assign(f, { kind: v.kind, temp: v.temp, okihai: v.okihai, name: v.name, address: v.address, memo: v.memo }); save(); return true; };
+    $('feOk').onclick = () => { if (!apply()) return; toast('保存しました'); if (onMap) { closeModal(); renderFavs(); } else favManager(); };
+    if (onMap) {
+      $('feAdd').onclick = () => {
+        if (!apply()) return;
+        const p = plan() || newPlan();
+        p.stops.push({ id: uid(), name: f.name || '', address: f.address || '', memo: f.memo || '', lat: f.lat, lng: f.lng, approx: false, priority: false, slot: '', kind: f.kind || 'deliver', temp: f.temp || '', okihai: f.okihai || '', collect: 0, favId: f.id, status: 'todo' });
+        f.uses = (f.uses || 0) + 1; f.last = Date.now(); p.estimate = null; save(); closeModal(); renderStops(); renderPlan();
+        toast(`「${f.name || f.address}」を今日の配達に追加しました（全部で${p.stops.length}件）`, 3000);
+      };
+      $('feDel').onclick = async () => {
+        if (!(await ask(`「${f.name || f.address}」をよく配達する家から削除しますか？`, '削除する', true))) return;
+        const i = S.favorites.indexOf(f); if (i < 0) return;
+        S.favorites.splice(i, 1); save(); closeModal(); renderFavs();
+        undoToast('削除しました', () => { S.favorites.splice(i, 0, f); save(); renderFavs(); });
+      };
+    }
   });
 }
 
