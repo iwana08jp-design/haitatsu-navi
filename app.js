@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第20版（2026年11月27日）';
+const APP_VERSION = '第21版（2026年11月27日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -1016,7 +1016,8 @@ function favGroupsHtml(filter) {
   list.forEach((f) => { const a = favAza(f, towns); (groups[a] = groups[a] || []).push(f); });
   const open = new Set(S.settings.openAza || []);
   const q = (filter || '').trim();
-  const html = order.filter((a) => groups[a]).map((a) => {
+  const html = order.filter((a) => groups[a] || (!q && a !== 'その他')).map((a) => {
+    if (!groups[a]) return `<div class="aza empty"><div class="aza-h"><span>　 ${esc(a)}</span><em>0軒</em></div></div>`;
     const fs = groups[a].sort((x, y) => (x.name || x.address).localeCompare(y.name || y.address, 'ja'));
     const isOpen = q ? true : open.has(a);
     const nSel = fs.filter((f) => FS.sel.has(f.id)).length, nIn = fs.filter(inTodayPlan).length;
