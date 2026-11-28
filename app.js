@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第24版（2026年11月27日）';
+const APP_VERSION = '第25版（2026年11月28日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -320,14 +320,16 @@ function setBaseLayer() {
 }
 
 function initMap() {
-  map = L.map('map', { zoomControl: false, maxZoom: 19, minZoom: 6 }).setView([36.6486, 138.1948], 13);
+  map = L.map('map', { zoomControl: false, maxZoom: 19, minZoom: 6, rotate: true, bearing: 0, touchRotate: false, rotateControl: false, shiftKeyRotate: false, touchPitch: false, pitchDrag: false }).setView([36.6486, 138.1948], 13);
   setBaseLayer();
-  map.createPane('favPane'); map.getPane('favPane').style.zIndex = 590;
+  map.createPane('favPane', map.getPane('norotatePane') || undefined); map.getPane('favPane').style.zIndex = 590;
   favLayer = L.layerGroup().addTo(map);
   stopLayer = L.layerGroup().addTo(map);
   hazardLayer = L.layerGroup().addTo(map);
   const zcls = () => map.getContainer().classList.toggle('zoom-lo', map.getZoom() < 16);
   map.on('zoomend', zcls); zcls();
+  map.on('rotate', () => { updateCompass(); updateMeArrow(); });
+  setupOrient();
   setupDrawing();
   map.on('click', onMapClick);
   map.on('contextmenu', (e) => mapMenu(e.latlng));
@@ -398,6 +400,75 @@ async function geocode(q) {
   return off[0] || null;
 }
 
+/* ---------- 地図の向き（北が上／進む方向が上／自由に回す） ---------- */
+const ORIENTS = { north: '北が上', heading: '進行方向', free: '自由' };
+const OR = { heading: null, compass: null, lastPos: null, compassOn: false };
+function distM(a, b) { const R = 6371000, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r * Math.cos((a.lat + b.lat) / 2 * r); return R * Math.hypot(dLat, dLng); }
+function bearingDeg(a, b) { const r = Math.PI / 180, y = Math.sin((b.lng - a.lng) * r) * Math.cos(b.lat * r), x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lng - a.lng) * r); return (Math.atan2(y, x) / r + 360) % 360; }
+// 画面の上から時計回りに、その方角（真北から何度）が何度に見えるか
+function screenAngleOf(deg) {
+  const c = map.getCenter(), r = Math.PI / 180, d = 0.001;
+  const q = L.latLng(c.lat + d * Math.cos(deg * r), c.lng + d * Math.sin(deg * r) / Math.cos(c.lat * r));
+  const a = map.latLngToContainerPoint(c), b = map.latLngToContainerPoint(q);
+  return (Math.atan2(b.x - a.x, a.y - b.y) / r + 360) % 360;
+}
+function updateCompass() {
+  const rose = $('cpRose'); if (!rose || !map) return;
+  rose.style.transform = `rotate(${screenAngleOf(0)}deg)`;
+}
+function updateMeArrow() {
+  if (!meMarker) return;
+  const el = meMarker.getElement(); if (!el) return;
+  const tri = el.querySelector('.me-tri'); if (!tri) return;
+  tri.classList.toggle('nohead', OR.heading == null);
+  tri.style.transform = `rotate(${screenAngleOf(OR.heading == null ? 0 : OR.heading)}deg)`;
+}
+function applyHeadingUp() {
+  if (!map.setBearing || OR.heading == null) return;
+  // 進む方向が画面の上になる向きに回す（符号は実際の見え方から決める）
+  const cur = map.getBearing(), seen = screenAngleOf(OR.heading);
+  let target = cur - seen * OR.sign;
+  target = ((target % 360) + 360) % 360;
+  let diff = ((target - cur + 540) % 360) - 180;
+  if (Math.abs(diff) < 3) return;
+  map.setBearing(cur + diff);
+}
+function setOrient(mode, quiet) {
+  S.settings.orient = mode; save();
+  if (map.touchRotate) { mode === 'free' ? map.touchRotate.enable() : map.touchRotate.disable(); }
+  if (mode === 'north' && map.setBearing) map.setBearing(0);
+  if (mode === 'heading') { startCompass(); if (OR.heading != null) applyHeadingUp(); else if (!quiet) toast('動き出すと、進む方向が上になります', 2500); }
+  $('cpLabel').textContent = ORIENTS[mode];
+  $('btnCompass').className = 'or-' + mode;
+  if (!quiet) toast(mode === 'north' ? '北が上になりました' : mode === 'heading' ? '進む方向が上になります' : '2本の指で地図を回せます', 2200);
+  updateCompass(); updateMeArrow();
+}
+function startCompass() {
+  if (OR.compassOn) return;
+  const on = () => { OR.compassOn = true; window.addEventListener('deviceorientation', (e) => {
+    let h = e.webkitCompassHeading; if (!Number.isFinite(h)) { if (e.absolute && Number.isFinite(e.alpha)) h = 360 - e.alpha; else return; }
+    OR.compass = h;
+    if (S.pos && (S.pos.speed == null || S.pos.speed < 0.8) && !(OR.lastMove && Date.now() - OR.lastMove < 4000)) {
+      OR.heading = h; updateMeArrow();
+      if (S.settings.orient === 'heading' && (!OR.lastTurn || Date.now() - OR.lastTurn > 300)) { OR.lastTurn = Date.now(); applyHeadingUp(); }
+    }
+  }, true); };
+  try {
+    if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().then((r) => { if (r === 'granted') on(); }).catch(() => {});
+    else if (window.DeviceOrientationEvent) on();
+  } catch (e) { /* コンパスが使えなくてもGPSの向きで回す */ }
+}
+function setupOrient() {
+  // setBearing の向き（時計回り／反時計回り）を一度だけ調べる
+  OR.sign = 1;
+  if (map.setBearing) {
+    map.setBearing(30); const seen = screenAngleOf(0); map.setBearing(0);
+    OR.sign = Math.abs(((seen - 30 + 540) % 360) - 180) < 5 ? 1 : -1;
+  }
+  $('btnCompass').onclick = () => { const order = ['north', 'heading', 'free']; const cur = S.settings.orient || 'north'; setOrient(order[(order.indexOf(cur) + 1) % 3]); };
+  setOrient(S.settings.orient === 'free' ? 'free' : 'north', true); // 開いたときは北が上（自由なら自由のまま）
+}
+
 /* ---------- 現在地 ---------- */
 let watchId = null, wakeLock = null;
 function startGeo() {
@@ -410,8 +481,16 @@ function startGeo() {
 function onPosition(p) {
   if (S.nav && S.nav.sim && !p.sim) return; // デモ走行中は本物のGPSを無視
   S.pos = p;
-  if (!meMarker) meMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [22, 22] }), zIndexOffset: 1000, interactive: false }).addTo(map);
+  // 進む向き：GPSの向き → 動いた方向 → 止まっているときはコンパス
+  const prev = OR.lastPos;
+  if (Number.isFinite(p.heading) && p.heading >= 0 && (p.speed == null || p.speed > 0.8)) { OR.heading = p.heading; OR.lastMove = Date.now(); }
+  else if (prev && distM(prev, p) > 8) { OR.heading = bearingDeg(prev, p); OR.lastMove = Date.now(); }
+  else if (OR.compass != null && (p.speed == null || p.speed < 0.8)) OR.heading = OR.compass;
+  if (!prev || distM(prev, p) > 8) OR.lastPos = { lat: p.lat, lng: p.lng };
+  if (!meMarker) meMarker = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: '<div class="me-tri"><svg viewBox="0 0 40 40"><path d="M20 3 L35 35 L20 27 L5 35 Z"/></svg></div>', iconSize: [40, 40], iconAnchor: [20, 20] }), zIndexOffset: 1000, interactive: false }).addTo(map);
   else meMarker.setLatLng([p.lat, p.lng]);
+  updateMeArrow();
+  if (S.settings.orient === 'heading' && OR.heading != null) applyHeadingUp();
   if (S.locateOnce) { S.locateOnce = false; map.setView([p.lat, p.lng], Math.max(map.getZoom(), 16)); }
   if (S.nav) updateNav();
 }

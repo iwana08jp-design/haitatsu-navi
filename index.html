@@ -27,6 +27,9 @@
   </div>
 </div>
 
+<!-- 左上：地図の向き -->
+<button id="btnCompass" title="地図の向き"><svg viewBox="0 0 40 40" id="cpRose"><path d="M20 3 L26 21 L20 18 L14 21 Z" fill="#d62828"/><path d="M20 37 L14 19 L20 22 L26 19 Z" fill="#9a968c"/><text x="20" y="15.5" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">N</text></svg><span id="cpLabel">北が上</span></button>
+
 <!-- 右上のボタン -->
 <div id="hud">
   <button id="btnPhoto" class="pillbtn" title="航空写真と切り替え">📷 写真</button>
@@ -76,6 +79,7 @@
 <div id="toast" class="hidden"></div>
 
 <script src="leaflet.js"></script>
+<script src="leaflet-rotate.js"></script>
 <script src="db.js"></script>
 <script src="graph-core.js"></script>
 <script src="app.js"></script>

@@ -269,3 +269,14 @@ h3 { margin: 18px 0 8px; font-size: 18px; border-left: 5px solid var(--amber); p
 .flbl { position: absolute; left: 50%; top: 22px; transform: translateX(-50%); white-space: nowrap; font-size: 11px; font-weight: 700; color: rgba(20,33,61,.75); text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff; pointer-events: none; }
 .zoom-lo .flbl { display: none; }
 .fpin.done { background: rgba(110,110,100,.35); }
+
+#btnCompass { position: absolute; left: 10px; top: calc(10px + var(--safe-top)); z-index: 650; width: 58px; height: 64px; border-radius: 14px; background: #fff; border: none; box-shadow: 0 2px 8px rgba(0,0,0,.3); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3px 0 2px; gap: 0; }
+#btnCompass svg { width: 40px; height: 40px; transition: transform .25s; }
+#btnCompass span { font-size: 10px; font-weight: 700; color: #333; line-height: 1.1; white-space: nowrap; }
+#btnCompass.or-heading { background: #e8f0fe; box-shadow: 0 0 0 3px #1a73e8, 0 2px 8px rgba(0,0,0,.3); }
+#btnCompass.or-free { background: #fff6dd; box-shadow: 0 0 0 3px #e0a000, 0 2px 8px rgba(0,0,0,.3); }
+#navBanner:not(.hidden) ~ #btnCompass { top: calc(118px + var(--safe-top)); }
+.me-tri { width: 40px; height: 40px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.45)); transition: transform .3s; }
+.me-tri svg { width: 40px; height: 40px; }
+.me-tri path { fill: #1a73e8; stroke: #fff; stroke-width: 3; stroke-linejoin: round; }
+.me-tri.nohead path { fill: #5b8fd8; }
