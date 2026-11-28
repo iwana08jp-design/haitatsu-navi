@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const GC = window.GraphCore;
 const DEMO = /[?&]demo/.test(location.search);
-const APP_VERSION = '第25版（2026年11月28日）';
+const APP_VERSION = '第26版（2026年11月28日）';
 const STATUS = { todo: '未配達', done: '配達完了', absent: '不在', redeliver: '再配達', skip: 'あとで' };
 const isOpen = (s) => s.status !== 'done';
 const ROUTE_MODES = [
@@ -333,7 +333,7 @@ function initMap() {
   setupDrawing();
   map.on('click', onMapClick);
   map.on('contextmenu', (e) => mapMenu(e.latlng));
-  map.on('dragstart', () => { if (S.nav) { S.nav.follow = false; $('btnFollow').classList.remove('hidden'); } });
+  map.on('dragstart', () => { if (S.settings.follow !== 'manual') { setFollow('manual', true); toast('手動にしました（🚗を押すと自動に戻ります）', 2500); } });
 }
 function onMapClick(e) {
   if (S.pick) { const cb = S.pick.cb; endPick(); cb(e.latlng); return; }
@@ -443,6 +443,19 @@ function setOrient(mode, quiet) {
   if (!quiet) toast(mode === 'north' ? '北が上になりました' : mode === 'heading' ? '進む方向が上になります' : '2本の指で地図を回せます', 2200);
   updateCompass(); updateMeArrow();
 }
+/* 地図が車の動きについていくか（自動）／止めておくか（手動） */
+function setFollow(mode, quiet) {
+  S.settings.follow = mode; save();
+  const b = $('btnFollowMode'); b.className = 'fm-' + mode; $('fmLabel').textContent = mode === 'auto' ? '自動' : '手動';
+  $('btnFollow').classList.toggle('hidden', mode === 'auto' || !S.nav);
+  if (mode === 'auto') {
+    startGeo();
+    if (S.pos) map.setView([S.pos.lat, S.pos.lng], Math.max(map.getZoom(), 16), { animate: true });
+    else if (!quiet) S.locateOnce = true;
+    if (S.nav && !S.nav.nonav) updateNav();
+  }
+  if (!quiet) toast(mode === 'auto' ? '自動：車の動きに合わせて地図が動きます' : '手動：地図は止まったままです', 2200);
+}
 function startCompass() {
   if (OR.compassOn) return;
   const on = () => { OR.compassOn = true; window.addEventListener('deviceorientation', (e) => {
@@ -467,6 +480,8 @@ function setupOrient() {
   }
   $('btnCompass').onclick = () => { const order = ['north', 'heading', 'free']; const cur = S.settings.orient || 'north'; setOrient(order[(order.indexOf(cur) + 1) % 3]); };
   setOrient(S.settings.orient === 'free' ? 'free' : 'north', true); // 開いたときは北が上（自由なら自由のまま）
+  $('btnFollowMode').onclick = () => setFollow(S.settings.follow === 'manual' ? 'auto' : 'manual');
+  setFollow(S.settings.follow === 'manual' ? 'manual' : 'auto', true);
 }
 
 /* ---------- 現在地 ---------- */
@@ -491,6 +506,7 @@ function onPosition(p) {
   else meMarker.setLatLng([p.lat, p.lng]);
   updateMeArrow();
   if (S.settings.orient === 'heading' && OR.heading != null) applyHeadingUp();
+  if (S.settings.follow !== 'manual' && !(S.nav && !S.nav.nonav) && !S.locateOnce) map.panTo([p.lat, p.lng], { animate: true, duration: 0.5 });
   if (S.locateOnce) { S.locateOnce = false; map.setView([p.lat, p.lng], Math.max(map.getZoom(), 16)); }
   if (S.nav) updateNav();
 }
@@ -1505,7 +1521,7 @@ function drawRoute() {
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
   const r = S.nav && S.nav.route; if (!r) return;
   routeLine = L.polyline(r.coords, { color: r.straight ? '#c8442f' : '#1a73e8', weight: 8, opacity: .8, dashArray: r.straight ? '10 10' : null }).addTo(map);
-  if (S.nav.follow) map.fitBounds(routeLine.getBounds(), { padding: [40, 40], maxZoom: 17 });
+  if (S.settings.follow !== 'manual' && !S.pos) map.fitBounds(routeLine.getBounds(), { padding: [40, 40], maxZoom: 17 });
 }
 function projectOnRoute(r, lat, lng, fromIdx) {
   const c = r.coords, cosL = Math.cos(lat * Math.PI / 180), mx = 111320 * cosL, my = 111320;
@@ -1538,7 +1554,7 @@ function updateNav() {
     return;
   }
   if (!pos || !r) return;
-  if (nav.follow) map.setView([pos.lat, pos.lng], Math.max(map.getZoom(), 16), { animate: true });
+  if (S.settings.follow !== 'manual') map.setView([pos.lat, pos.lng], Math.max(map.getZoom(), 16), { animate: true });
   const pr = projectOnRoute(r, pos.lat, pos.lng, r.straight ? 0 : Math.max(0, (nav.lastIdx || 0) - 20));
   const along = pr ? pr.along : 0;
   if (pr) nav.lastIdx = pr.i;
@@ -1596,7 +1612,7 @@ async function navDone(status) {
   if (status !== 'done') toast(`「${stopLabel(s)}」を${STATUS[status]}にしました`);
   const next = nextStopIndex(p);
   if (next < 0) return finishAll();
-  nav.idx = next; nav.follow = true; $('btnFollow').classList.add('hidden');
+  nav.idx = next;
   renderStops();
   if (!nav.nonav) speak(`次は、${stopLabel(p.stops[next])}です${p.stops[next].kind === 'pickup' ? '。集荷です' : ''}`);
   if (nav.sim && nav.route) nav.simPos = nav.simPos || null;
@@ -1900,7 +1916,7 @@ async function boot() {
   $('nvPhoto').onclick = togglePhoto;
   updatePhotoButtons(S.settings.mapSource);
   $('pickCancel').onclick = endPick;
-  $('btnFollow').onclick = () => { if (!S.nav) return; if (S.nav.nonav) { if (S.pos) map.setView([S.pos.lat, S.pos.lng], Math.max(map.getZoom(), 16)); $('btnFollow').classList.add('hidden'); return; } S.nav.follow = true; $('btnFollow').classList.add('hidden'); updateNav(); };
+  $('btnFollow').onclick = () => setFollow('auto');
   $('nvDone').onclick = () => navDone('done');
   $('nvAbsent').onclick = () => navDone('absent');
   $('nvRedeliver').onclick = () => navDone('redeliver');
